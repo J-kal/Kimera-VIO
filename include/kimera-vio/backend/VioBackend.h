@@ -61,6 +61,9 @@
 #include "kimera-vio/utils/ThreadsafeQueue.h"
 #include "kimera-vio/utils/UtilsGTSAM.h"
 #include "kimera-vio/utils/UtilsOpenCV.h"
+#ifdef ENABLE_GRAPH_TIME_CENTRIC_ADAPTER
+#include "kimera-vio/integration/GraphTimeCentricBackendAdapter.h"
+#endif
 
 namespace VIO {
 
@@ -252,6 +255,12 @@ class VioBackend {
       std::optional<gtsam::Vector3> odom_vel = std::nullopt);
   void addStateValuesFromNavState(const FrameId& frame_id,
                                   const gtsam::NavState& nav_state);
+
+#ifdef ENABLE_GRAPH_TIME_CENTRIC_ADAPTER
+  // Optional adapter used when runtime flag is enabled.
+  std::unique_ptr<kimera::integration::GraphTimeCentricBackendAdapter>
+      graph_time_centric_adapter_;
+#endif
 
   void addImuFactor(const FrameId& from_id,
                     const FrameId& to_id,

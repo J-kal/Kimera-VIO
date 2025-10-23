@@ -133,6 +133,21 @@ VioBackend::VioBackend(const gtsam::Pose3& B_Pose_leftCamRect,
 
   // Print parameters if verbose
   if (VLOG_IS_ON(1)) print();
+
+  // Optional GraphTimeCentric adapter initialization (runtime toggle)
+  if (backend_params_.use_graph_time_centric) {
+#ifdef ENABLE_GRAPH_TIME_CENTRIC_ADAPTER
+    graph_time_centric_adapter_ =
+        std::make_unique<kimera::integration::GraphTimeCentricBackendAdapter>();
+    if (!graph_time_centric_adapter_->initializeAdapter()) {
+      LOG(FATAL) << "Failed to initialize GraphTimeCentric adapter.";
+    }
+#else
+    LOG(FATAL)
+        << "BackendParams.use_graph_time_centric is true but the adapter was not built."
+        << " Build with -DENABLE_GRAPH_TIME_CENTRIC_ADAPTER=ON to enable.";
+#endif
+  }
 }
 
 /* -------------------------------------------------------------------------- */

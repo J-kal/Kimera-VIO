@@ -87,6 +87,11 @@ add_subdirectory(src/frontend)
 ### Add source code for Backend.
 add_subdirectory(include/kimera-vio/backend)
 add_subdirectory(src/backend)
+if(ENABLE_GRAPH_TIME_CENTRIC_ADAPTER)
+  add_subdirectory(include/kimera-vio/integration)
+  add_subdirectory(src/integration)
+  target_compile_definitions(${PROJECT_NAME} PRIVATE ENABLE_GRAPH_TIME_CENTRIC_ADAPTER)
+endif()
 ### Add source code for factors
 add_subdirectory(include/kimera-vio/factors)
 add_subdirectory(src/factors)
@@ -173,6 +178,7 @@ target_link_libraries(stereoVIOEuroc PUBLIC kimera_vio::kimera_vio)
 ############################### TESTS ##########################################
 ### Add testing
 option(KIMERA_BUILD_TESTS "Build tests" ON)
+option(ENABLE_GRAPH_TIME_CENTRIC_ADAPTER "Enable GraphTimeCentric adapter" OFF)
 if(KIMERA_BUILD_TESTS)
   # Download and unpack googletest at configure time
   # TODO Consider doing the same for glog, gflags, although it might
