@@ -1,0 +1,32 @@
+{
+	"folders": [
+		{
+			"path": "../kimera_vio_ros"
+		},
+		{
+			"path": "../../MIT-SPARK/Kimera-VIO"
+		},
+		{
+			"path": "../../dorian3d"
+		},
+		{
+			"path": "../kimera_graph_msgs"
+		},
+		{
+			"path": "../kimera_common"
+		},
+		{
+			"path": "../kimera_graph_visualizer"
+		},
+		{
+			"path": "../../accelerated_features"
+		},
+		{
+			"path": "../../cpp_network_example"
+		},
+		{
+			"path": "../../XFeat-Image-Matching-ONNX-Sample"
+		}
+	],
+	"settings": {}
+}

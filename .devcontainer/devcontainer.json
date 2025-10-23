@@ -1,0 +1,66 @@
+// For format details, see https://aka.ms/devcontainer.json. For config options, see the
+// README at: https://github.com/devcontainers/templates/tree/main/src/ubuntu
+{
+	"name": "kimera_noetic_xfeat_dev",
+	// Or use a Dockerfile or Docker Compose file. More info: https://containers.dev/guide/dockerfile
+	// build from Dockerfile
+	"build": {
+		"dockerfile": "Dockerfile",
+		"context": "..",
+		"args": {
+			"USERNAME": "${localEnv:USER}",
+		}
+	},
+
+	"workspaceMount": "source=${localWorkspaceFolder}/../,target=/workspaces/src/,type=bind",
+	"workspaceFolder": "/workspaces/src/",
+
+	"features": {
+		"ghcr.io/devcontainers/features/python:1": {},
+		"ghcr.io/devcontainers-community/features/llvm:3": {},
+		"ghcr.io/devcontainers-extra/features/zsh-plugins:0": {}
+	},
+
+	"runArgs": [
+		"--name", "kimera_noetic_xfeat_dev",
+		"--cap-add=NET_ADMIN",
+		"--privileged",
+		"--user=${localEnv:USER}",
+		"--gpus=all",
+		"--network=host",
+		"--mount", "type=bind,source=${localEnv:HOME}/workspaces/datasets,target=/datasets",
+		"-v", "/dev:/dev",
+		"--device-cgroup-rule", "c 81:* rmw",
+		"--device-cgroup-rule", "c 189:* rmw",
+		"-v", "/tmp/.X11-unix:/tmp/.X11-unix"
+	],
+
+	"remoteEnv": {
+		"DISPLAY": "${localEnv:DISPLAY}",
+		"QT_X11_NO_MITSHM": "1",
+		"QT_QPA_PLATFORM": "xcb",
+	},
+	
+	// Features to add to the dev container. More info: https://containers.dev/features.
+	// "features": {},
+
+	// Use 'forwardPorts' to make a list of ports inside the container available locally.
+	// "forwardPorts": [],
+
+	// Use 'postCreateCommand' to run commands after the container is created.
+	// "postCreateCommand": "uname -a",
+
+	// Configure tool-specific properties.
+	// "customizations": {},
+
+	"remoteUser": "${localEnv:USER}",
+	"postCreateCommand": "sudo cp /root/.zshrc ${HOME} && sudo cp -r /root/.oh-my-zsh ${HOME} && sudo chown -R ${localEnv:USER} ${HOME}/.zshrc ${HOME}/.oh-my-zsh",
+	"customizations": {
+		"vscode": {
+			"extensions": [
+				"llvm-vs-code-extensions.vscode-clangd",
+				"mutantdino.resourcemonitor"
+			]
+		}
+	}
+}

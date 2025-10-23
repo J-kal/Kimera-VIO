@@ -1,0 +1,20 @@
+[workspace]
+authors = ["Mike Xiangyu Liu <liu.xiangyu@ucy.ac.cy>"]
+channels = ["robostack-noetic", "conda-forge"]
+name = "kimera_noetic_ws"
+platforms = ["linux-64"]
+version = "0.1.0"
+
+[activation]
+scripts = ["/opt/ros/noetic/setup.sh", "devel/setup.sh"]
+
+[tasks]
+clone-src = { cmd = "mkdir -p src && git clone git@github.com:MIT-SPARK/Kimera-VIO-ROS.git src/Kimera-VIO-ROS && vcs import src < src/Kimera-VIO-ROS/install/kimera_vio_ros_ssh.rosinstall" }
+catkin-config = { cmd = "catkin config --merge-devel -DCMAKE_BUILD_TYPE=Release -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DCMAKE_CXX_FLAGS=\"-Wno-error=unused-but-set-variable -Wno-error=deprecated-copy\" -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache"  }
+build ={ cmd = "catkin build" }
+build-gtsam = { cmd = "cd src/gtsam && mkdir -p build && cd build && cmake -DCMAKE_INSTALL_PREFIX=/usr/local -DCMAKE_BUILD_TYPE=Release -DGTSAM_USE_SYSTEM_EIGEN=ON -DGTSAM_POSE3_EXPMAP=ON -DGTSAM_ROT3_EXPMAP=ON -DGTSAM_TANGENT_PREINTEGRATION=OFF -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -G Ninja -DGTSAM_BUILD_TESTS=OFF -DGTSAM_BUILD_EXAMPLES_ALWAYS=OFF .." }
+rviz = { cmd = "rviz" }
+roscore = { cmd = "roscore" }
+rqt = { cmd = "rqt --force-discover" }
+kmr-rviz = { cmd = "rviz -d $(rospack find kimera_vio_ros)/rviz/kimera_vio_euroc.rviz" }
+kmr-euroc = { cmd = "roslaunch kimera_vio_ros kimera_vio_ros_euroc.launch online:=true" }
