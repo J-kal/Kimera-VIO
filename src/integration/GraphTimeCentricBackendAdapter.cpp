@@ -130,7 +130,42 @@ bool GraphTimeCentricBackendAdapter::initialize() {
 #endif
 }
 
+// Buffer non-keyframe state for later addition
+bool GraphTimeCentricBackendAdapter::bufferNonKeyframeState(
+    const Timestamp& timestamp,
+    const gtsam::Pose3& pose,
+    const gtsam::Vector3& velocity,
+    const gtsam::imuBias::ConstantBias& bias) {
+#ifdef ENABLE_GRAPH_TIME_CENTRIC_ADAPTER
+  if (!initialized_) {
+    LOG(ERROR) << "GraphTimeCentricBackendAdapter: not initialized, cannot buffer state";
+    return false;
+  }
+  
+  std::lock_guard<std::mutex> lock(state_buffer_mutex_);
+  
+  BufferedState buffered_state;
+  buffered_state.timestamp = timestamp;
+  buffered_state.pose = pose;
+  buffered_state.velocity = velocity;
+  buffered_state.bias = bias;
+  
+  non_keyframe_buffer_.push_back(buffered_state);
+  
+  const double timestamp_sec = timestampToSeconds(timestamp);
+  LOG(INFO) << "GraphTimeCentricBackendAdapter: buffered non-keyframe state at t=" 
+            << std::fixed << std::setprecision(6) << timestamp_sec
+            << " (buffer size: " << non_keyframe_buffer_.size() << ")";
+  
+  return true;
+#else
+  LOG(WARNING) << "GraphTimeCentricBackendAdapter: ENABLE_GRAPH_TIME_CENTRIC_ADAPTER not defined";
+  return false;
+#endif
+}
+
 // TODO(KIMERA_ADAPTER_6): Add keyframe state to graph (creates timestamp-indexed state)
+// UPDATED: Now processes buffered non-keyframes first
 void GraphTimeCentricBackendAdapter::addKeyframeState(
     const Timestamp& timestamp,
     const gtsam::Pose3& pose,
@@ -142,27 +177,77 @@ void GraphTimeCentricBackendAdapter::addKeyframeState(
     return;
   }
   
-  const double timestamp_sec = timestampToSeconds(timestamp);
-  LOG(INFO) << "GraphTimeCentricBackendAdapter: adding keyframe state at t=" 
-            << std::fixed << std::setprecision(6) << timestamp_sec;
+  const double keyframe_timestamp_sec = timestampToSeconds(timestamp);
+  
+  LOG(INFO) << "GraphTimeCentricBackendAdapter: processing keyframe at t=" 
+            << std::fixed << std::setprecision(6) << keyframe_timestamp_sec;
   
   try {
-    // Convert to NavState for storage
-    gtsam::NavState nav_state(pose, velocity);
+    // STEP 1: Process all buffered non-keyframe states in chronological order
+    std::vector<BufferedState> states_to_add;
+    {
+      std::lock_guard<std::mutex> lock(state_buffer_mutex_);
+      
+      if (!non_keyframe_buffer_.empty()) {
+        // Sort buffered states by timestamp
+        std::sort(non_keyframe_buffer_.begin(), non_keyframe_buffer_.end());
+        
+        // Copy to local vector for processing
+        states_to_add = non_keyframe_buffer_;
+        
+        LOG(INFO) << "GraphTimeCentricBackendAdapter: processing " 
+                  << states_to_add.size() << " buffered non-keyframe states";
+        
+        // Clear the buffer
+        non_keyframe_buffer_.clear();
+      }
+    }
     
-    // Create state at this timestamp through the interface
-    auto state_handle = interface_->createStateAtTimestamp(timestamp_sec, nav_state, bias);
+    // Add buffered states (outside lock)
+    for (const auto& buffered_state : states_to_add) {
+      const double buffered_timestamp_sec = timestampToSeconds(buffered_state.timestamp);
+      
+      // Skip if timestamp is after the keyframe (shouldn't happen, but be safe)
+      if (buffered_timestamp_sec >= keyframe_timestamp_sec) {
+        LOG(WARNING) << "GraphTimeCentricBackendAdapter: skipping buffered state at t=" 
+                     << buffered_timestamp_sec << " (after keyframe at t=" 
+                     << keyframe_timestamp_sec << ")";
+        continue;
+      }
+      
+      gtsam::NavState nav_state(buffered_state.pose, buffered_state.velocity);
+      auto state_handle = interface_->createStateAtTimestamp(
+          buffered_timestamp_sec, nav_state, buffered_state.bias);
+      
+      if (state_handle.has_value()) {
+        state_timestamps_.push_back(buffered_timestamp_sec);
+        num_states_++;
+        
+        LOG(INFO) << "GraphTimeCentricBackendAdapter: added buffered state " 
+                  << state_handle->state_index 
+                  << " at timestamp " << buffered_timestamp_sec;
+      } else {
+        LOG(WARNING) << "GraphTimeCentricBackendAdapter: failed to add buffered state at t=" 
+                     << buffered_timestamp_sec;
+      }
+    }
     
-    if (state_handle.has_value()) {
-      // Store the state handle for retrieval
-      state_timestamps_.push_back(timestamp_sec);
+    // STEP 2: Add the keyframe state
+    gtsam::NavState keyframe_nav_state(pose, velocity);
+    auto keyframe_state_handle = interface_->createStateAtTimestamp(
+        keyframe_timestamp_sec, keyframe_nav_state, bias);
+    
+    if (keyframe_state_handle.has_value()) {
+      state_timestamps_.push_back(keyframe_timestamp_sec);
       num_states_++;
       
-      LOG(INFO) << "GraphTimeCentricBackendAdapter: created state " << state_handle->state_index 
-                << " at timestamp " << state_handle->timestamp 
+      LOG(INFO) << "GraphTimeCentricBackendAdapter: created keyframe state " 
+                << keyframe_state_handle->state_index 
+                << " at timestamp " << keyframe_state_handle->timestamp 
                 << " (total states: " << num_states_ << ")";
     } else {
-      LOG(WARNING) << "GraphTimeCentricBackendAdapter: failed to create state at t=" << timestamp_sec;
+      LOG(WARNING) << "GraphTimeCentricBackendAdapter: failed to create keyframe state at t=" 
+                   << keyframe_timestamp_sec;
     }
     
   } catch (const std::exception& e) {

@@ -126,28 +126,61 @@ public:
   // ========================================================================
 
   /**
+   * @brief Buffer a non-keyframe state for later addition
+   * 
+   * Called by VioBackend when a frame is NOT selected as keyframe but should
+   * still be added to the graph. These frames are buffered and added in batch
+   * when the next keyframe is seen.
+   * 
+   * @param timestamp Frame timestamp
+   * @param pose Pose estimate
+   * @param velocity Velocity estimate
+   * @param bias IMU bias estimate
+   * @return true if successfully buffered
+   */
+  bool bufferNonKeyframeState(
+      const Timestamp& timestamp,
+      const gtsam::Pose3& pose,
+      const gtsam::Vector3& velocity,
+      const gtsam::imuBias::ConstantBias& bias);
+
+  /**
    * @brief Add a keyframe state at specified timestamp
    * 
    * Called by VioBackend when a new keyframe is created. This creates
    * a state in GraphTimeCentric at the keyframe timestamp.
+   * ALSO processes any buffered non-keyframe states in chronological order.
    * 
    * @param timestamp Keyframe timestamp (Kimera Timestamp type)
-   * @param pose_estimate Initial pose estimate for the keyframe
+   * @param pose Pose estimate for the keyframe
+   * @param velocity Velocity estimate
+   * @param bias IMU bias estimate
    * @return true if state successfully created
    * 
-   * TODO: Convert Timestamp to double seconds
-   * TODO: Call integration_interface_->createStateAtTimestamp()
-   * TODO: Store keyframe state handle for later retrieval
+   * Implementation:
+   * 1. Process all buffered non-keyframes (sorted by timestamp)
+   * 2. Add the keyframe state
+   * 3. Clear the buffer
+   */
+  void addKeyframeState(
+      const Timestamp& timestamp,
+      const gtsam::Pose3& pose,
+      const gtsam::Vector3& velocity,
+      const gtsam::imuBias::ConstantBias& bias);
+
+  /**
+   * @brief Legacy interface - add a keyframe with Pose only
+   * @param timestamp Keyframe timestamp
+   * @param pose_estimate Initial pose estimate for the keyframe
+   * @return true if state successfully created
    */
   bool addKeyframeState(Timestamp timestamp, const gtsam::Pose3& pose_estimate);
 
   /**
-   * @brief Add a keyframe with full NavState estimate
+   * @brief Legacy interface - add a keyframe with full NavState estimate
    * @param timestamp Keyframe timestamp
    * @param nav_state Initial NavState (pose + velocity)
    * @return true if state successfully created
-   * 
-   * TODO: Similar to addKeyframeState but includes velocity
    */
   bool addKeyframeState(Timestamp timestamp, const gtsam::NavState& nav_state);
 
@@ -313,6 +346,15 @@ public:
   }
 
   /**
+   * @brief Get number of non-keyframe states buffered
+   * @return Non-keyframe buffer size
+   */
+  size_t getNumBufferedStates() const {
+    std::lock_guard<std::mutex> lock(state_buffer_mutex_);
+    return non_keyframe_buffer_.size();
+  }
+
+  /**
    * @brief Get statistics string for logging
    * @return Formatted statistics string
    */
@@ -341,8 +383,26 @@ private:
   std::deque<ImuAccGyr> imu_buffer_;
   mutable std::mutex buffer_mutex_;
 
+  // Non-keyframe buffer structure
+  struct BufferedState {
+    Timestamp timestamp;
+    gtsam::Pose3 pose;
+    gtsam::Vector3 velocity;
+    gtsam::imuBias::ConstantBias bias;
+    
+    // For sorting by timestamp
+    bool operator<(const BufferedState& other) const {
+      return timestamp < other.timestamp;
+    }
+  };
+  
+  // Buffer for non-keyframe states (to be added when next keyframe arrives)
+  std::vector<BufferedState> non_keyframe_buffer_;
+  mutable std::mutex state_buffer_mutex_;
+
   // State tracking
   std::map<Timestamp, fgo::integration::StateHandle> keyframe_states_;
+  std::vector<double> state_timestamps_;  // All timestamps (keyframes + non-keyframes) in order
   size_t num_states_ = 0;
 
   // Timing
