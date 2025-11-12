@@ -177,7 +177,15 @@ target_link_libraries(stereoVIOEuroc PUBLIC kimera_vio::kimera_vio)
 
 ############################### TESTS ##########################################
 ### Add testing
-option(KIMERA_BUILD_TESTS "Build tests" ON)
+# Respect CATKIN_ENABLE_TESTING and BUILD_TESTING flags
+if(DEFINED CATKIN_ENABLE_TESTING AND NOT CATKIN_ENABLE_TESTING)
+  set(KIMERA_BUILD_TESTS_DEFAULT OFF)
+elseif(DEFINED BUILD_TESTING AND NOT BUILD_TESTING)
+  set(KIMERA_BUILD_TESTS_DEFAULT OFF)
+else()
+  set(KIMERA_BUILD_TESTS_DEFAULT ON)
+endif()
+option(KIMERA_BUILD_TESTS "Build tests" ${KIMERA_BUILD_TESTS_DEFAULT})
 option(ENABLE_GRAPH_TIME_CENTRIC_ADAPTER "Enable GraphTimeCentric adapter" OFF)
 if(KIMERA_BUILD_TESTS)
   # Download and unpack googletest at configure time
