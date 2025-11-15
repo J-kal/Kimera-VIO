@@ -15,23 +15,97 @@
 //
 //  Author: Kimera VIO Integration Team
 //
-//  GraphTimeCentricBackendAdapter implementation
+//  GraphTimeCentricBackendAdapter implementation using PIMPL pattern
 //
 
 #include "kimera-vio/integration/GraphTimeCentricBackendAdapter.h"
 #include <iostream>
 #include <sstream>
 #include <chrono>
+#include <algorithm>
+#include <cmath>
+
+// ============================================================================
+// PIMPL INTERFACE - Abstract base class for implementation
+// ============================================================================
+
+namespace VIO {
+
+// Forward declaration of implementation base class
+class GraphTimeCentricBackendAdapter::Impl {
+public:
+  virtual ~Impl() = default;
+  
+  // Initialization
+  virtual bool initialize() = 0;
+  virtual bool isInitialized() const = 0;
+  
+  // State management
+  virtual bool bufferNonKeyframeState(const Timestamp& timestamp,
+                                     const gtsam::Pose3& pose,
+                                     const gtsam::Vector3& velocity,
+                                     const gtsam::imuBias::ConstantBias& bias) = 0;
+  virtual void addKeyframeState(const Timestamp& timestamp,
+                                const gtsam::Pose3& pose,
+                                const gtsam::Vector3& velocity,
+                                const gtsam::imuBias::ConstantBias& bias) = 0;
+  
+  // Optimization
+  virtual bool optimizeGraph() = 0;
+  virtual double getLastOptimizationTime() const = 0;
+  
+  // Result retrieval
+  virtual std::optional<gtsam::Pose3> getOptimizedPoseAtTime(double timestamp) const = 0;
+  virtual std::optional<gtsam::Vector3> getOptimizedVelocityAtTime(double timestamp) const = 0;
+  virtual std::optional<gtsam::imuBias::ConstantBias> getOptimizedBiasAtTime(double timestamp) const = 0;
+  virtual std::optional<gtsam::Matrix> getStateCovarianceAtTime(double timestamp) const = 0;
+  virtual gtsam::Values getLastResult() = 0;
+  
+  // New methods
+  virtual std::optional<gtsam::NavState> getStateAtTime(Timestamp timestamp) = 0;
+  virtual std::optional<gtsam::NavState> getLatestState() = 0;
+  virtual std::optional<gtsam::imuBias::ConstantBias> getLatestIMUBias() = 0;
+  virtual std::optional<gtsam::Matrix> getStateCovariance(Timestamp timestamp) = 0;
+  virtual std::optional<gtsam::Matrix> getLatestStateCovariance() = 0;
+  
+  // IMU handling
+  virtual bool addIMUMeasurement(const ImuAccGyr& imu_measurement) = 0;
+  virtual size_t addIMUMeasurements(const std::vector<ImuAccGyr>& imu_measurements) = 0;
+  virtual bool addIMUTimestamps(const std::vector<double>& imu_timestamps) = 0;
+  virtual bool preintegrateIMUBetweenStates(Timestamp t_i, Timestamp t_j) = 0;
+  
+  // Legacy methods
+  virtual bool addKeyframeState(Timestamp timestamp, const gtsam::Pose3& pose_estimate) = 0;
+  virtual bool addKeyframeState(Timestamp timestamp, const gtsam::NavState& nav_state) = 0;
+  virtual bool addStateValues(unsigned long frame_id, double timestamp, const gtsam::NavState& navstate) = 0;
+  
+  // Statistics
+  virtual size_t getNumStates() const = 0;
+  virtual size_t getNumBufferedIMU() const = 0;
+  virtual size_t getNumBufferedStates() const = 0;
+  virtual std::string getStatistics() const = 0;
+  
+  // Helper methods
+  virtual double timestampToSeconds(const Timestamp& timestamp) const = 0;
+  virtual Timestamp secondsToTimestamp(double seconds) const = 0;
+};
+
+} // namespace VIO
+
+// ============================================================================
+// ENABLED IMPLEMENTATION - Full integration with online_fgo_core
+// ============================================================================
 
 #ifdef ENABLE_GRAPH_TIME_CENTRIC_ADAPTER
+
 #include "online_fgo_core/integration/KimeraIntegrationInterface.h"
 #include "online_fgo_core/interface/ApplicationInterface.h"
 #include "online_fgo_core/interface/LoggerInterface.h"
 #include "online_fgo_core/interface/ParameterInterface.h"
 #include "online_fgo_core/data/DataTypesFGO.h"
 
-// Standalone application implementation for testing
 namespace {
+  // Standalone application implementation for testing
   class StandaloneLogger : public fgo::core::LoggerInterface {
   public:
     void debug(const std::string& msg) override { std::cout << "[DEBUG] " << msg << std::endl; }
@@ -70,494 +144,830 @@ namespace {
     StandaloneParameters params_;
   };
 }
-#endif
 
 namespace VIO {
 
-GraphTimeCentricBackendAdapter::GraphTimeCentricBackendAdapter(
-    const BackendParams& backend_params,
-    const ImuParams& imu_params)
-    : backend_params_(backend_params)
-    , imu_params_(imu_params)
-    , initialized_(false)
-    , num_states_(0)
-    , last_optimization_time_(0.0) {
-  
-  LOG(INFO) << "GraphTimeCentricBackendAdapter: created";
-}
-
-GraphTimeCentricBackendAdapter::~GraphTimeCentricBackendAdapter() {
-  LOG(INFO) << "GraphTimeCentricBackendAdapter: destroyed";
-}
-
-// TODO(KIMERA_ADAPTER_5): Initialize the integration interface
-bool GraphTimeCentricBackendAdapter::initialize() {
-#ifdef ENABLE_GRAPH_TIME_CENTRIC_ADAPTER
-  if (initialized_) {
-    LOG(WARNING) << "GraphTimeCentricBackendAdapter: already initialized";
-    return true;
+// Full implementation when adapter is enabled
+class GraphTimeCentricBackendAdapterImpl : public GraphTimeCentricBackendAdapter::Impl {
+public:
+  GraphTimeCentricBackendAdapterImpl(const BackendParams& backend_params,
+                                     const ImuParams& imu_params)
+      : backend_params_(backend_params)
+      , imu_params_(imu_params)
+      , initialized_(false)
+      , num_states_(0)
+      , last_optimization_time_(0.0)
+      , last_imu_timestamp_sec_(0.0) {
+    LOG(INFO) << "GraphTimeCentricBackendAdapter: created (enabled implementation)";
   }
   
-  LOG(INFO) << "GraphTimeCentricBackendAdapter: initializing...";
+  ~GraphTimeCentricBackendAdapterImpl() override {
+    LOG(INFO) << "GraphTimeCentricBackendAdapter: destroyed (enabled implementation)";
+  }
   
-  try {
-    // Create standalone application for testing
-    app_ = std::make_shared<StandaloneApp>();
+  bool initialize() override {
+    if (initialized_) {
+      LOG(WARNING) << "GraphTimeCentricBackendAdapter: already initialized";
+      return true;
+    }
     
-    // Create integration interface
-    interface_ = std::make_shared<fgo::integration::KimeraIntegrationInterface>(app_);
+    LOG(INFO) << "GraphTimeCentricBackendAdapter: initializing...";
     
-    // Create integration parameters from Kimera params
-    auto integration_params = createIntegrationParams();
-    
-    // Initialize the interface
-    if (!interface_->initialize(integration_params)) {
-      LOG(ERROR) << "GraphTimeCentricBackendAdapter: failed to initialize interface";
+    try {
+      // Create standalone application for testing
+      standalone_app_ = std::make_unique<StandaloneApp>();
+      
+      // Create integration interface
+      integration_interface_ = std::make_unique<fgo::integration::KimeraIntegrationInterface>(*standalone_app_);
+      
+      // Create integration parameters from Kimera params
+      auto integration_params = createIntegrationParams();
+      
+      // Initialize the interface
+      if (!integration_interface_->initialize(integration_params)) {
+        LOG(ERROR) << "GraphTimeCentricBackendAdapter: failed to initialize interface";
+        return false;
+      }
+      
+      initialized_ = true;
+      LOG(INFO) << "GraphTimeCentricBackendAdapter: initialized successfully";
+      return true;
+      
+    } catch (const std::exception& e) {
+      LOG(ERROR) << "GraphTimeCentricBackendAdapter: initialization failed: " << e.what();
+      return false;
+    }
+  }
+  
+  bool isInitialized() const override {
+    return initialized_;
+  }
+  
+  bool bufferNonKeyframeState(const Timestamp& timestamp,
+                             const gtsam::Pose3& pose,
+                             const gtsam::Vector3& velocity,
+                             const gtsam::imuBias::ConstantBias& bias) override {
+    if (!initialized_) {
+      LOG(ERROR) << "GraphTimeCentricBackendAdapter: not initialized, cannot buffer state";
       return false;
     }
     
-    initialized_ = true;
-    LOG(INFO) << "GraphTimeCentricBackendAdapter: initialized successfully";
-    return true;
+    std::lock_guard<std::mutex> lock(state_buffer_mutex_);
     
-  } catch (const std::exception& e) {
-    LOG(ERROR) << "GraphTimeCentricBackendAdapter: initialization failed: " << e.what();
+    BufferedState buffered_state;
+    buffered_state.timestamp = timestamp;
+    buffered_state.pose = pose;
+    buffered_state.velocity = velocity;
+    buffered_state.bias = bias;
+    
+    non_keyframe_buffer_.push_back(buffered_state);
+    
+    const double timestamp_sec = timestampToSeconds(timestamp);
+    LOG(INFO) << "GraphTimeCentricBackendAdapter: buffered non-keyframe state at t=" 
+              << std::fixed << std::setprecision(6) << timestamp_sec
+              << " (buffer size: " << non_keyframe_buffer_.size() << ")";
+    
+    return true;
+  }
+  
+  void addKeyframeState(const Timestamp& timestamp,
+                       const gtsam::Pose3& pose,
+                       const gtsam::Vector3& velocity,
+                       const gtsam::imuBias::ConstantBias& bias) override {
+    if (!initialized_) {
+      LOG(ERROR) << "GraphTimeCentricBackendAdapter: not initialized, cannot add keyframe";
+      return;
+    }
+    
+    const double keyframe_timestamp_sec = timestampToSeconds(timestamp);
+    
+    LOG(INFO) << "GraphTimeCentricBackendAdapter: adding keyframe at t=" 
+              << std::fixed << std::setprecision(6) << keyframe_timestamp_sec;
+    
+    try {
+      // Add the keyframe state directly
+      auto keyframe_state_handle = integration_interface_->createStateAtTimestamp(keyframe_timestamp_sec);
+      
+      if (keyframe_state_handle.valid) {
+        state_timestamps_.push_back(keyframe_timestamp_sec);
+        num_states_++;
+        
+        LOG(INFO) << "GraphTimeCentricBackendAdapter: created keyframe state " 
+                  << keyframe_state_handle.index 
+                  << " at timestamp " << keyframe_state_handle.timestamp 
+                  << " (total states: " << num_states_ << ")";
+      } else {
+        LOG(WARNING) << "GraphTimeCentricBackendAdapter: failed to create keyframe state at t=" 
+                     << keyframe_timestamp_sec;
+      }
+      
+    } catch (const std::exception& e) {
+      LOG(ERROR) << "GraphTimeCentricBackendAdapter: failed to add keyframe: " << e.what();
+    }
+  }
+  
+  bool optimizeGraph() override {
+    if (!initialized_) {
+      LOG(ERROR) << "GraphTimeCentricBackendAdapter: not initialized, cannot optimize";
+      return false;
+    }
+    
+    if (state_timestamps_.empty()) {
+      LOG(WARNING) << "GraphTimeCentricBackendAdapter: no states added, skipping optimization";
+      return false;
+    }
+    
+    LOG(INFO) << "GraphTimeCentricBackendAdapter: optimizing graph with " 
+              << state_timestamps_.size() << " states";
+    
+    try {
+      // Trigger optimization through the interface
+      auto result = integration_interface_->optimize();
+      
+      if (result.success) {
+        last_optimization_time_ = state_timestamps_.back();
+        
+        LOG(INFO) << "GraphTimeCentricBackendAdapter: optimization succeeded"
+                  << " - optimized " << result.num_states << " states"
+                  << ", time: " << result.optimization_time_ms << " ms";
+        return true;
+      } else {
+        LOG(ERROR) << "GraphTimeCentricBackendAdapter: optimization failed: " << result.error_message;
+        return false;
+      }
+      
+    } catch (const std::exception& e) {
+      LOG(ERROR) << "GraphTimeCentricBackendAdapter: optimization failed with exception: " << e.what();
+      return false;
+    }
+  }
+  
+  double getLastOptimizationTime() const override {
+    return last_optimization_time_;
+  }
+  
+  std::optional<gtsam::Pose3> getOptimizedPoseAtTime(double timestamp) const override {
+    if (!initialized_ || !integration_interface_) {
+      LOG(ERROR) << "GraphTimeCentricBackendAdapter: not initialized";
+      return std::nullopt;
+    }
+    
+    auto state_handle = findStateHandleNearTimestamp(timestamp);
+    if (!state_handle.has_value()) {
+      return std::nullopt;
+    }
+    
+    auto nav_state = integration_interface_->getOptimizedState(state_handle.value());
+    if (nav_state.has_value()) {
+      return nav_state->pose();
+    }
+    
+    return std::nullopt;
+  }
+  
+  std::optional<gtsam::Vector3> getOptimizedVelocityAtTime(double timestamp) const override {
+    if (!initialized_ || !integration_interface_) {
+      return std::nullopt;
+    }
+    
+    auto state_handle = findStateHandleNearTimestamp(timestamp);
+    if (!state_handle.has_value()) {
+      return std::nullopt;
+    }
+    
+    auto nav_state = integration_interface_->getOptimizedState(state_handle.value());
+    if (nav_state.has_value()) {
+      return nav_state->velocity();
+    }
+    
+    return std::nullopt;
+  }
+  
+  std::optional<gtsam::imuBias::ConstantBias> getOptimizedBiasAtTime(double timestamp) const override {
+    if (!initialized_ || !integration_interface_) {
+      return std::nullopt;
+    }
+    
+    auto state_handle = findStateHandleNearTimestamp(timestamp);
+    if (!state_handle.has_value()) {
+      return std::nullopt;
+    }
+    
+    return integration_interface_->getOptimizedBias(state_handle.value());
+  }
+  
+  std::optional<gtsam::Matrix> getStateCovarianceAtTime(double timestamp) const override {
+    if (!initialized_ || !integration_interface_) {
+      return std::nullopt;
+    }
+    
+    auto state_handle = findStateHandleNearTimestamp(timestamp);
+    if (!state_handle.has_value()) {
+      return std::nullopt;
+    }
+    
+    return integration_interface_->getStateCovariance(state_handle.value());
+  }
+  
+  gtsam::Values getLastResult() override {
+    gtsam::Values values;
+    
+    if (!initialized_ || state_timestamps_.empty()) {
+      return values;
+    }
+    
+    try {
+      for (const auto& timestamp : state_timestamps_) {
+        auto state_handle = findStateHandleNearTimestamp(timestamp);
+        if (!state_handle.has_value()) {
+          continue;
+        }
+        
+        auto nav_state = integration_interface_->getOptimizedState(state_handle.value());
+        auto bias = integration_interface_->getOptimizedBias(state_handle.value());
+        
+        if (nav_state.has_value()) {
+          gtsam::Key pose_key = gtsam::Symbol('x', state_handle->index).key();
+          gtsam::Key vel_key = gtsam::Symbol('v', state_handle->index).key();
+          gtsam::Key bias_key = gtsam::Symbol('b', state_handle->index).key();
+          
+          values.insert(pose_key, nav_state->pose());
+          values.insert(vel_key, nav_state->velocity());
+          if (bias.has_value()) {
+            values.insert(bias_key, bias.value());
+          }
+        }
+      }
+    } catch (const std::exception& e) {
+      LOG(ERROR) << "GraphTimeCentricBackendAdapter: failed to get last result: " << e.what();
+    }
+    
+    return values;
+  }
+  
+  std::optional<gtsam::NavState> getStateAtTime(Timestamp timestamp) override {
+    const double timestamp_sec = timestampToSeconds(timestamp);
+    auto state_handle = findStateHandleNearTimestamp(timestamp_sec);
+    if (!state_handle.has_value()) {
+      return std::nullopt;
+    }
+    return integration_interface_->getOptimizedState(state_handle.value());
+  }
+  
+  std::optional<gtsam::NavState> getLatestState() override {
+    if (!initialized_ || !integration_interface_) {
+      return std::nullopt;
+    }
+    return integration_interface_->getLatestOptimizedState();
+  }
+  
+  std::optional<gtsam::imuBias::ConstantBias> getLatestIMUBias() override {
+    if (!initialized_ || !integration_interface_) {
+      return std::nullopt;
+    }
+    return integration_interface_->getLatestOptimizedBias();
+  }
+  
+  std::optional<gtsam::Matrix> getStateCovariance(Timestamp timestamp) override {
+    const double timestamp_sec = timestampToSeconds(timestamp);
+    auto state_handle = findStateHandleNearTimestamp(timestamp_sec);
+    if (!state_handle.has_value()) {
+      return std::nullopt;
+    }
+    return integration_interface_->getStateCovariance(state_handle.value());
+  }
+  
+  std::optional<gtsam::Matrix> getLatestStateCovariance() override {
+    if (!initialized_ || state_timestamps_.empty()) {
+      return std::nullopt;
+    }
+    
+    const double latest_timestamp = state_timestamps_.back();
+    auto state_handle = findStateHandleNearTimestamp(latest_timestamp);
+    if (!state_handle.has_value()) {
+      return std::nullopt;
+    }
+    return integration_interface_->getStateCovariance(state_handle.value());
+  }
+  
+  bool addIMUMeasurement(const ImuAccGyr& imu_measurement) override {
+    const double timestamp_sec = timestampToSeconds(imu_measurement.timestamp_);
+    
+    double dt = 0.005; // default 200 Hz
+    if (last_imu_timestamp_sec_ > 0.0) {
+      dt = timestamp_sec - last_imu_timestamp_sec_;
+    }
+    last_imu_timestamp_sec_ = timestamp_sec;
+    
+    return integration_interface_->addIMUData(timestamp_sec, imu_measurement.acc_, imu_measurement.gyr_, dt);
+  }
+  
+  size_t addIMUMeasurements(const std::vector<ImuAccGyr>& imu_measurements) override {
+    if (!initialized_) {
+      return 0;
+    }
+    
+    std::vector<double> timestamps;
+    std::vector<Eigen::Vector3d> accels;
+    std::vector<Eigen::Vector3d> gyros;
+    std::vector<double> dts;
+    
+    timestamps.reserve(imu_measurements.size());
+    accels.reserve(imu_measurements.size());
+    gyros.reserve(imu_measurements.size());
+    dts.reserve(imu_measurements.size());
+    
+    double prev_timestamp_sec = last_imu_timestamp_sec_;
+    
+    for (const auto& imu : imu_measurements) {
+      const double timestamp_sec = timestampToSeconds(imu.timestamp_);
+      timestamps.push_back(timestamp_sec);
+      accels.push_back(imu.acc_);
+      gyros.push_back(imu.gyr_);
+      
+      double dt = 0.005;
+      if (prev_timestamp_sec > 0.0) {
+        dt = timestamp_sec - prev_timestamp_sec;
+      }
+      dts.push_back(dt);
+      prev_timestamp_sec = timestamp_sec;
+    }
+    
+    if (!timestamps.empty()) {
+      last_imu_timestamp_sec_ = timestamps.back();
+    }
+    
+    return integration_interface_->addIMUDataBatch(timestamps, accels, gyros, dts);
+  }
+  
+  bool addIMUTimestamps(const std::vector<double>& /*imu_timestamps*/) override {
+    LOG(WARNING) << "GraphTimeCentricBackendAdapter::addIMUTimestamps not implemented - use addIMUMeasurements instead";
+    return true;
+  }
+  
+  bool preintegrateIMUBetweenStates(Timestamp /*t_i*/, Timestamp /*t_j*/) override {
+    LOG(INFO) << "GraphTimeCentricBackendAdapter::preintegrateIMUBetweenStates - "
+              << "preintegration is handled automatically during optimization";
+    return true;
+  }
+  
+  bool addKeyframeState(Timestamp timestamp, const gtsam::Pose3& pose_estimate) override {
+    gtsam::Vector3 velocity = gtsam::Vector3::Zero();
+    gtsam::imuBias::ConstantBias bias;
+    addKeyframeState(timestamp, pose_estimate, velocity, bias);
+    return true;
+  }
+  
+  bool addKeyframeState(Timestamp timestamp, const gtsam::NavState& nav_state) override {
+    gtsam::imuBias::ConstantBias bias;
+    addKeyframeState(timestamp, nav_state.pose(), nav_state.velocity(), bias);
+    return true;
+  }
+  
+  bool addStateValues(unsigned long /*frame_id*/, double timestamp, const gtsam::NavState& navstate) override {
+    Timestamp kimera_timestamp = static_cast<Timestamp>(timestamp * 1e9);
+    gtsam::imuBias::ConstantBias bias;
+    addKeyframeState(kimera_timestamp, navstate.pose(), navstate.velocity(), bias);
+    return true;
+  }
+  
+  size_t getNumStates() const override {
+    return num_states_;
+  }
+  
+  size_t getNumBufferedIMU() const override {
+    return 0; // IMU buffer not implemented in current design
+  }
+  
+  size_t getNumBufferedStates() const override {
+    std::lock_guard<std::mutex> lock(state_buffer_mutex_);
+    return non_keyframe_buffer_.size();
+  }
+  
+  std::string getStatistics() const override {
+    std::ostringstream oss;
+    oss << "GraphTimeCentricBackendAdapter Statistics (Enabled):\n";
+    oss << "  Initialized: " << (initialized_ ? "yes" : "no") << "\n";
+    oss << "  Num states: " << num_states_ << "\n";
+    oss << "  Num buffered non-keyframes: " << getNumBufferedStates() << "\n";
+    oss << "  Last optimization time: " << last_optimization_time_ << " s\n";
+    return oss.str();
+  }
+  
+  double timestampToSeconds(const Timestamp& timestamp) const override {
+    return static_cast<double>(timestamp) / 1e9;
+  }
+  
+  Timestamp secondsToTimestamp(double seconds) const override {
+    return static_cast<Timestamp>(seconds * 1e9);
+  }
+
+private:
+  // Parameters
+  BackendParams backend_params_;
+  ImuParams imu_params_;
+  
+  // Integration interface to online_fgo_core
+  std::unique_ptr<fgo::integration::KimeraIntegrationInterface> integration_interface_;
+  std::unique_ptr<StandaloneApp> standalone_app_;
+  
+  // State
+  bool initialized_;
+  size_t num_states_;
+  double last_optimization_time_;
+  double last_imu_timestamp_sec_;
+  std::vector<double> state_timestamps_;
+  
+  // Buffering
+  struct BufferedState {
+    Timestamp timestamp;
+    gtsam::Pose3 pose;
+    gtsam::Vector3 velocity;
+    gtsam::imuBias::ConstantBias bias;
+    
+    bool operator<(const BufferedState& other) const {
+      return timestamp < other.timestamp;
+    }
+  };
+  std::vector<BufferedState> non_keyframe_buffer_;
+  mutable std::mutex state_buffer_mutex_;
+  
+  // Helper methods
+  fgo::integration::KimeraIntegrationParams createIntegrationParams() const {
+    fgo::integration::KimeraIntegrationParams params;
+    
+    params.use_isam2 = true;
+    params.use_gp_priors = backend_params_.addBetweenStereoFactors_;
+    params.optimize_on_keyframe = true;
+    params.smoother_lag = 5.0;
+    
+    params.imu_rate = 200.0;
+    params.accel_noise_sigma = imu_params_.acc_noise_;
+    params.gyro_noise_sigma = imu_params_.gyro_noise_;
+    params.accel_bias_rw_sigma = imu_params_.acc_walk_;
+    params.gyro_bias_rw_sigma = imu_params_.gyro_walk_;
+    params.gravity = Eigen::Vector3d(0.0, 0.0, -9.81);
+    
+    if (params.use_gp_priors) {
+      params.gp_type = "WNOJ";
+    }
+    
+    params.optimization_period = 0.1;
+    
+    LOG(INFO) << "Created integration params: use_isam2=" << params.use_isam2
+              << ", use_gp=" << params.use_gp_priors
+              << ", smoother_lag=" << params.smoother_lag;
+    
+    return params;
+  }
+  
+  std::optional<fgo::integration::StateHandle> findStateHandleNearTimestamp(double timestamp) const {
+    if (state_timestamps_.empty()) {
+      return std::nullopt;
+    }
+    
+    auto it = std::min_element(state_timestamps_.begin(), state_timestamps_.end(),
+                               [timestamp](double a, double b) {
+                                 return std::abs(a - timestamp) < std::abs(b - timestamp);
+                               });
+    
+    if (it == state_timestamps_.end()) {
+      return std::nullopt;
+    }
+    
+    const double closest_time = *it;
+    const double tolerance = 0.1;
+    
+    if (std::abs(closest_time - timestamp) > tolerance) {
+      return std::nullopt;
+    }
+    
+    const size_t state_index = std::distance(state_timestamps_.begin(), it);
+    return fgo::integration::StateHandle(state_index, closest_time);
+  }
+};
+
+} // namespace VIO
+
+#else // ENABLE_GRAPH_TIME_CENTRIC_ADAPTER not defined
+
+// ============================================================================
+// STUB IMPLEMENTATION - Disabled adapter (logs warnings)
+// ============================================================================
+
+namespace VIO {
+
+class GraphTimeCentricBackendAdapterStub : public GraphTimeCentricBackendAdapter::Impl {
+public:
+  GraphTimeCentricBackendAdapterStub(const BackendParams& /*backend_params*/,
+                                     const ImuParams& /*imu_params*/) {
+    LOG(WARNING) << "GraphTimeCentricBackendAdapter: created (DISABLED - stub implementation)";
+  }
+  
+  ~GraphTimeCentricBackendAdapterStub() override = default;
+  
+  bool initialize() override {
+    LOG(WARNING) << "GraphTimeCentricBackendAdapter: DISABLED - initialize() called";
     return false;
   }
+  
+  bool isInitialized() const override {
+    return false;
+  }
+  
+  bool bufferNonKeyframeState(const Timestamp&, const gtsam::Pose3&,
+                             const gtsam::Vector3&, const gtsam::imuBias::ConstantBias&) override {
+    LOG_DISABLED();
+    return false;
+  }
+  
+  void addKeyframeState(const Timestamp&, const gtsam::Pose3&,
+                       const gtsam::Vector3&, const gtsam::imuBias::ConstantBias&) override {
+    LOG_DISABLED();
+  }
+  
+  bool optimizeGraph() override {
+    LOG_DISABLED();
+    return false;
+  }
+  
+  double getLastOptimizationTime() const override {
+    return 0.0;
+  }
+  
+  std::optional<gtsam::Pose3> getOptimizedPoseAtTime(double) const override {
+    LOG_DISABLED();
+    return std::nullopt;
+  }
+  
+  std::optional<gtsam::Vector3> getOptimizedVelocityAtTime(double) const override {
+    LOG_DISABLED();
+    return std::nullopt;
+  }
+  
+  std::optional<gtsam::imuBias::ConstantBias> getOptimizedBiasAtTime(double) const override {
+    LOG_DISABLED();
+    return std::nullopt;
+  }
+  
+  std::optional<gtsam::Matrix> getStateCovarianceAtTime(double) const override {
+    LOG_DISABLED();
+    return std::nullopt;
+  }
+  
+  gtsam::Values getLastResult() override {
+    LOG_DISABLED();
+    return gtsam::Values();
+  }
+  
+  std::optional<gtsam::NavState> getStateAtTime(Timestamp) override {
+    LOG_DISABLED();
+    return std::nullopt;
+  }
+  
+  std::optional<gtsam::NavState> getLatestState() override {
+    LOG_DISABLED();
+    return std::nullopt;
+  }
+  
+  std::optional<gtsam::imuBias::ConstantBias> getLatestIMUBias() override {
+    LOG_DISABLED();
+    return std::nullopt;
+  }
+  
+  std::optional<gtsam::Matrix> getStateCovariance(Timestamp) override {
+    LOG_DISABLED();
+    return std::nullopt;
+  }
+  
+  std::optional<gtsam::Matrix> getLatestStateCovariance() override {
+    LOG_DISABLED();
+    return std::nullopt;
+  }
+  
+  bool addIMUMeasurement(const ImuAccGyr&) override {
+    LOG_DISABLED();
+    return false;
+  }
+  
+  size_t addIMUMeasurements(const std::vector<ImuAccGyr>&) override {
+    LOG_DISABLED();
+    return 0;
+  }
+  
+  bool addIMUTimestamps(const std::vector<double>&) override {
+    LOG_DISABLED();
+    return false;
+  }
+  
+  bool preintegrateIMUBetweenStates(Timestamp, Timestamp) override {
+    LOG_DISABLED();
+    return false;
+  }
+  
+  bool addKeyframeState(Timestamp, const gtsam::Pose3&) override {
+    LOG_DISABLED();
+    return false;
+  }
+  
+  bool addKeyframeState(Timestamp, const gtsam::NavState&) override {
+    LOG_DISABLED();
+    return false;
+  }
+  
+  bool addStateValues(unsigned long, double, const gtsam::NavState&) override {
+    LOG_DISABLED();
+    return false;
+  }
+  
+  size_t getNumStates() const override {
+    return 0;
+  }
+  
+  size_t getNumBufferedIMU() const override {
+    return 0;
+  }
+  
+  size_t getNumBufferedStates() const override {
+    return 0;
+  }
+  
+  std::string getStatistics() const override {
+    return "GraphTimeCentricBackendAdapter: DISABLED (stub implementation)\n";
+  }
+  
+  double timestampToSeconds(const Timestamp& timestamp) const override {
+    return static_cast<double>(timestamp) / 1e9;
+  }
+  
+  Timestamp secondsToTimestamp(double seconds) const override {
+    return static_cast<Timestamp>(seconds * 1e9);
+  }
+
+private:
+  void LOG_DISABLED() const {
+    static int call_count = 0;
+    if (++call_count % 100 == 1) {  // Log every 100th call to avoid spam
+      LOG(WARNING) << "GraphTimeCentricBackendAdapter: DISABLED - operation skipped "
+                   << "(logged every 100 calls)";
+    }
+  }
+};
+
+} // namespace VIO
+
+#endif // ENABLE_GRAPH_TIME_CENTRIC_ADAPTER
+
+// ============================================================================
+// PUBLIC WRAPPER IMPLEMENTATION - Uses PIMPL pattern
+// ============================================================================
+
+namespace VIO {
+
+// Select implementation at compile time
+#ifdef ENABLE_GRAPH_TIME_CENTRIC_ADAPTER
+  using SelectedImpl = GraphTimeCentricBackendAdapterImpl;
 #else
-  LOG(WARNING) << "GraphTimeCentricBackendAdapter: ENABLE_GRAPH_TIME_CENTRIC_ADAPTER not defined";
-  return false;
+  using SelectedImpl = GraphTimeCentricBackendAdapterStub;
 #endif
+
+// Constructor - creates the appropriate implementation
+GraphTimeCentricBackendAdapter::GraphTimeCentricBackendAdapter(
+    const BackendParams& backend_params,
+    const ImuParams& imu_params)
+    : pimpl_(std::make_unique<SelectedImpl>(backend_params, imu_params)) {
 }
 
-// Buffer non-keyframe state for later addition
+// Destructor - defined in .cpp for unique_ptr with forward-declared type
+GraphTimeCentricBackendAdapter::~GraphTimeCentricBackendAdapter() = default;
+
+// All public methods delegate to implementation
+bool GraphTimeCentricBackendAdapter::initialize() {
+  return pimpl_->initialize();
+}
+
+bool GraphTimeCentricBackendAdapter::isInitialized() const {
+  return pimpl_->isInitialized();
+}
+
 bool GraphTimeCentricBackendAdapter::bufferNonKeyframeState(
     const Timestamp& timestamp,
     const gtsam::Pose3& pose,
     const gtsam::Vector3& velocity,
     const gtsam::imuBias::ConstantBias& bias) {
-#ifdef ENABLE_GRAPH_TIME_CENTRIC_ADAPTER
-  if (!initialized_) {
-    LOG(ERROR) << "GraphTimeCentricBackendAdapter: not initialized, cannot buffer state";
-    return false;
-  }
-  
-  std::lock_guard<std::mutex> lock(state_buffer_mutex_);
-  
-  BufferedState buffered_state;
-  buffered_state.timestamp = timestamp;
-  buffered_state.pose = pose;
-  buffered_state.velocity = velocity;
-  buffered_state.bias = bias;
-  
-  non_keyframe_buffer_.push_back(buffered_state);
-  
-  const double timestamp_sec = timestampToSeconds(timestamp);
-  LOG(INFO) << "GraphTimeCentricBackendAdapter: buffered non-keyframe state at t=" 
-            << std::fixed << std::setprecision(6) << timestamp_sec
-            << " (buffer size: " << non_keyframe_buffer_.size() << ")";
-  
-  return true;
-#else
-  LOG(WARNING) << "GraphTimeCentricBackendAdapter: ENABLE_GRAPH_TIME_CENTRIC_ADAPTER not defined";
-  return false;
-#endif
+  return pimpl_->bufferNonKeyframeState(timestamp, pose, velocity, bias);
 }
 
-// TODO(KIMERA_ADAPTER_6): Add keyframe state to graph (creates timestamp-indexed state)
-// UPDATED: Now processes buffered non-keyframes first
 void GraphTimeCentricBackendAdapter::addKeyframeState(
     const Timestamp& timestamp,
     const gtsam::Pose3& pose,
     const gtsam::Vector3& velocity,
     const gtsam::imuBias::ConstantBias& bias) {
-#ifdef ENABLE_GRAPH_TIME_CENTRIC_ADAPTER
-  if (!initialized_) {
-    LOG(ERROR) << "GraphTimeCentricBackendAdapter: not initialized, cannot add keyframe";
-    return;
-  }
-  
-  const double keyframe_timestamp_sec = timestampToSeconds(timestamp);
-  
-  LOG(INFO) << "GraphTimeCentricBackendAdapter: processing keyframe at t=" 
-            << std::fixed << std::setprecision(6) << keyframe_timestamp_sec;
-  
-  try {
-    // STEP 1: Process all buffered non-keyframe states in chronological order
-    std::vector<BufferedState> states_to_add;
-    {
-      std::lock_guard<std::mutex> lock(state_buffer_mutex_);
-      
-      if (!non_keyframe_buffer_.empty()) {
-        // Sort buffered states by timestamp
-        std::sort(non_keyframe_buffer_.begin(), non_keyframe_buffer_.end());
-        
-        // Copy to local vector for processing
-        states_to_add = non_keyframe_buffer_;
-        
-        LOG(INFO) << "GraphTimeCentricBackendAdapter: processing " 
-                  << states_to_add.size() << " buffered non-keyframe states";
-        
-        // Clear the buffer
-        non_keyframe_buffer_.clear();
-      }
-    }
-    
-    // Add buffered states (outside lock)
-    for (const auto& buffered_state : states_to_add) {
-      const double buffered_timestamp_sec = timestampToSeconds(buffered_state.timestamp);
-      
-      // Skip if timestamp is after the keyframe (shouldn't happen, but be safe)
-      if (buffered_timestamp_sec >= keyframe_timestamp_sec) {
-        LOG(WARNING) << "GraphTimeCentricBackendAdapter: skipping buffered state at t=" 
-                     << buffered_timestamp_sec << " (after keyframe at t=" 
-                     << keyframe_timestamp_sec << ")";
-        continue;
-      }
-      
-      gtsam::NavState nav_state(buffered_state.pose, buffered_state.velocity);
-      auto state_handle = interface_->createStateAtTimestamp(
-          buffered_timestamp_sec, nav_state, buffered_state.bias);
-      
-      if (state_handle.has_value()) {
-        state_timestamps_.push_back(buffered_timestamp_sec);
-        num_states_++;
-        
-        LOG(INFO) << "GraphTimeCentricBackendAdapter: added buffered state " 
-                  << state_handle->state_index 
-                  << " at timestamp " << buffered_timestamp_sec;
-      } else {
-        LOG(WARNING) << "GraphTimeCentricBackendAdapter: failed to add buffered state at t=" 
-                     << buffered_timestamp_sec;
-      }
-    }
-    
-    // STEP 2: Add the keyframe state
-    gtsam::NavState keyframe_nav_state(pose, velocity);
-    auto keyframe_state_handle = interface_->createStateAtTimestamp(
-        keyframe_timestamp_sec, keyframe_nav_state, bias);
-    
-    if (keyframe_state_handle.has_value()) {
-      state_timestamps_.push_back(keyframe_timestamp_sec);
-      num_states_++;
-      
-      LOG(INFO) << "GraphTimeCentricBackendAdapter: created keyframe state " 
-                << keyframe_state_handle->state_index 
-                << " at timestamp " << keyframe_state_handle->timestamp 
-                << " (total states: " << num_states_ << ")";
-    } else {
-      LOG(WARNING) << "GraphTimeCentricBackendAdapter: failed to create keyframe state at t=" 
-                   << keyframe_timestamp_sec;
-    }
-    
-  } catch (const std::exception& e) {
-    LOG(ERROR) << "GraphTimeCentricBackendAdapter: failed to add keyframe: " << e.what();
-  }
-#else
-  LOG(WARNING) << "GraphTimeCentricBackendAdapter: ENABLE_GRAPH_TIME_CENTRIC_ADAPTER not defined";
-#endif
+  pimpl_->addKeyframeState(timestamp, pose, velocity, bias);
 }
 
-// TODO(KIMERA_ADAPTER_7): Add IMU measurement to be used for preintegration
-void GraphTimeCentricBackendAdapter::addIMUMeasurement(
-    const Timestamp& timestamp,
-    const gtsam::Vector3& linear_acceleration,
-    const gtsam::Vector3& angular_velocity) {
-#ifdef ENABLE_GRAPH_TIME_CENTRIC_ADAPTER
-  if (!initialized_) {
-    LOG(ERROR) << "GraphTimeCentricBackendAdapter: not initialized, cannot add IMU measurement";
-    return;
-  }
-  
-  const double timestamp_sec = timestampToSeconds(timestamp);
-  
-  try {
-    // Add IMU measurement through the interface
-    interface_->addIMUData(timestamp_sec, linear_acceleration, angular_velocity);
-    
-    // Log occasionally to avoid spam (every 10th measurement)
-    static int imu_count = 0;
-    if (++imu_count % 10 == 0) {
-      LOG(INFO) << "GraphTimeCentricBackendAdapter: added IMU measurement " << imu_count 
-                << " at t=" << std::fixed << std::setprecision(6) << timestamp_sec;
-    }
-    
-  } catch (const std::exception& e) {
-    LOG(ERROR) << "GraphTimeCentricBackendAdapter: failed to add IMU measurement: " << e.what();
-  }
-#else
-  LOG(WARNING) << "GraphTimeCentricBackendAdapter: ENABLE_GRAPH_TIME_CENTRIC_ADAPTER not defined";
-#endif
-}
-
-// TODO(KIMERA_ADAPTER_8): Trigger optimization of the factor graph
 bool GraphTimeCentricBackendAdapter::optimizeGraph() {
-#ifdef ENABLE_GRAPH_TIME_CENTRIC_ADAPTER
-  if (!initialized_) {
-    LOG(ERROR) << "GraphTimeCentricBackendAdapter: not initialized, cannot optimize";
-    return false;
-  }
-  
-  if (state_timestamps_.empty()) {
-    LOG(WARNING) << "GraphTimeCentricBackendAdapter: no states added, skipping optimization";
-    return false;
-  }
-  
-  LOG(INFO) << "GraphTimeCentricBackendAdapter: optimizing graph with " 
-            << state_timestamps_.size() << " states";
-  
-  try {
-    // Trigger optimization through the interface
-    auto result = interface_->optimize();
-    
-    if (result.success) {
-      last_optimization_result_ = result;
-      last_optimization_time_ = state_timestamps_.back();
-      
-      LOG(INFO) << "GraphTimeCentricBackendAdapter: optimization succeeded"
-                << " - optimized " << result.num_optimized_states << " states"
-                << ", error: " << result.final_error
-                << ", iterations: " << result.num_iterations;
-      return true;
-    } else {
-      LOG(ERROR) << "GraphTimeCentricBackendAdapter: optimization failed: " << result.error_message;
-      return false;
-    }
-    
-  } catch (const std::exception& e) {
-    LOG(ERROR) << "GraphTimeCentricBackendAdapter: optimization failed with exception: " << e.what();
-    return false;
-  }
-#else
-  LOG(WARNING) << "GraphTimeCentricBackendAdapter: ENABLE_GRAPH_TIME_CENTRIC_ADAPTER not defined";
-  return false;
-#endif
+  return pimpl_->optimizeGraph();
 }
 
-// Legacy optimize() method for compatibility
 bool GraphTimeCentricBackendAdapter::optimize(double /*timestep*/) {
-  return optimizeGraph();
+  return pimpl_->optimizeGraph();
 }
 
-// TODO(KIMERA_ADAPTER_9): Get optimized pose at specific timestamp
+double GraphTimeCentricBackendAdapter::getLastOptimizationTime() const {
+  return pimpl_->getLastOptimizationTime();
+}
+
 std::optional<gtsam::Pose3> GraphTimeCentricBackendAdapter::getOptimizedPoseAtTime(double timestamp) const {
-#ifdef ENABLE_GRAPH_TIME_CENTRIC_ADAPTER
-  if (!initialized_ || !interface_) {
-    LOG(ERROR) << "GraphTimeCentricBackendAdapter: not initialized";
-    return std::nullopt;
-  }
-  
-  // Find closest state handle
-  auto state_handle = findStateHandleNearTimestamp(timestamp);
-  if (!state_handle.has_value()) {
-    LOG(WARNING) << "GraphTimeCentricBackendAdapter: no state found near t=" << timestamp;
-    return std::nullopt;
-  }
-  
-  // Get pose from interface
-  return interface_->getOptimizedPose(state_handle.value());
-#else
-  LOG(WARNING) << "GraphTimeCentricBackendAdapter: ENABLE_GRAPH_TIME_CENTRIC_ADAPTER not defined";
-  return std::nullopt;
-#endif
+  return pimpl_->getOptimizedPoseAtTime(timestamp);
 }
 
-// TODO(KIMERA_ADAPTER_10): Get optimized velocity at specific timestamp
 std::optional<gtsam::Vector3> GraphTimeCentricBackendAdapter::getOptimizedVelocityAtTime(double timestamp) const {
-#ifdef ENABLE_GRAPH_TIME_CENTRIC_ADAPTER
-  if (!initialized_ || !interface_) {
-    LOG(ERROR) << "GraphTimeCentricBackendAdapter: not initialized";
-    return std::nullopt;
-  }
-  
-  auto state_handle = findStateHandleNearTimestamp(timestamp);
-  if (!state_handle.has_value()) {
-    LOG(WARNING) << "GraphTimeCentricBackendAdapter: no state found near t=" << timestamp;
-    return std::nullopt;
-  }
-  
-  return interface_->getOptimizedVelocity(state_handle.value());
-#else
-  LOG(WARNING) << "GraphTimeCentricBackendAdapter: ENABLE_GRAPH_TIME_CENTRIC_ADAPTER not defined";
-  return std::nullopt;
-#endif
+  return pimpl_->getOptimizedVelocityAtTime(timestamp);
 }
 
-// TODO(KIMERA_ADAPTER_11): Get optimized IMU bias at specific timestamp
 std::optional<gtsam::imuBias::ConstantBias> GraphTimeCentricBackendAdapter::getOptimizedBiasAtTime(double timestamp) const {
-#ifdef ENABLE_GRAPH_TIME_CENTRIC_ADAPTER
-  if (!initialized_ || !interface_) {
-    LOG(ERROR) << "GraphTimeCentricBackendAdapter: not initialized";
-    return std::nullopt;
-  }
-  
-  auto state_handle = findStateHandleNearTimestamp(timestamp);
-  if (!state_handle.has_value()) {
-    LOG(WARNING) << "GraphTimeCentricBackendAdapter: no state found near t=" << timestamp;
-    return std::nullopt;
-  }
-  
-  return interface_->getOptimizedBias(state_handle.value());
-#else
-  LOG(WARNING) << "GraphTimeCentricBackendAdapter: ENABLE_GRAPH_TIME_CENTRIC_ADAPTER not defined";
-  return std::nullopt;
-#endif
+  return pimpl_->getOptimizedBiasAtTime(timestamp);
 }
 
-// TODO(KIMERA_ADAPTER_12): Get state covariance at specific timestamp
 std::optional<gtsam::Matrix> GraphTimeCentricBackendAdapter::getStateCovarianceAtTime(double timestamp) const {
-#ifdef ENABLE_GRAPH_TIME_CENTRIC_ADAPTER
-  if (!initialized_ || !interface_) {
-    LOG(ERROR) << "GraphTimeCentricBackendAdapter: not initialized";
-    return std::nullopt;
-  }
-  
-  auto state_handle = findStateHandleNearTimestamp(timestamp);
-  if (!state_handle.has_value()) {
-    LOG(WARNING) << "GraphTimeCentricBackendAdapter: no state found near t=" << timestamp;
-    return std::nullopt;
-  }
-  
-  return interface_->getStateCovariance(state_handle.value());
-#else
-  LOG(WARNING) << "GraphTimeCentricBackendAdapter: ENABLE_GRAPH_TIME_CENTRIC_ADAPTER not defined";
-  return std::nullopt;
-#endif
+  return pimpl_->getStateCovarianceAtTime(timestamp);
 }
 
-// Legacy getLastResult() for compatibility
 gtsam::Values GraphTimeCentricBackendAdapter::getLastResult() {
-#ifdef ENABLE_GRAPH_TIME_CENTRIC_ADAPTER
-  gtsam::Values values;
-  
-  if (!initialized_ || state_timestamps_.empty()) {
-    return values;
-  }
-  
-  // Reconstruct Values from optimized states
-  try {
-    for (const auto& timestamp : state_timestamps_) {
-      auto state_handle = findStateHandleNearTimestamp(timestamp);
-      if (!state_handle.has_value()) {
-        continue;
-      }
-      
-      auto pose = interface_->getOptimizedPose(state_handle.value());
-      auto velocity = interface_->getOptimizedVelocity(state_handle.value());
-      auto bias = interface_->getOptimizedBias(state_handle.value());
-      
-      if (pose.has_value() && velocity.has_value()) {
-        // Create keys using state index
-        gtsam::Key pose_key = gtsam::Symbol('x', state_handle->state_index).key();
-        gtsam::Key vel_key = gtsam::Symbol('v', state_handle->state_index).key();
-        gtsam::Key bias_key = gtsam::Symbol('b', state_handle->state_index).key();
-        
-        values.insert(pose_key, pose.value());
-        values.insert(vel_key, velocity.value());
-        if (bias.has_value()) {
-          values.insert(bias_key, bias.value());
-        }
-      }
-    }
-  } catch (const std::exception& e) {
-    LOG(ERROR) << "GraphTimeCentricBackendAdapter: failed to get last result: " << e.what();
-  }
-  
-  return values;
-#else
-  return gtsam::Values();
-#endif
+  return pimpl_->getLastResult();
 }
 
-// TODO(KIMERA_ADAPTER_13): Helper - Convert Kimera timestamp to seconds
+std::optional<gtsam::NavState> GraphTimeCentricBackendAdapter::getStateAtTime(Timestamp timestamp) {
+  return pimpl_->getStateAtTime(timestamp);
+}
+
+std::optional<gtsam::NavState> GraphTimeCentricBackendAdapter::getLatestState() {
+  return pimpl_->getLatestState();
+}
+
+std::optional<gtsam::imuBias::ConstantBias> GraphTimeCentricBackendAdapter::getLatestIMUBias() {
+  return pimpl_->getLatestIMUBias();
+}
+
+std::optional<gtsam::Matrix> GraphTimeCentricBackendAdapter::getStateCovariance(Timestamp timestamp) {
+  return pimpl_->getStateCovariance(timestamp);
+}
+
+std::optional<gtsam::Matrix> GraphTimeCentricBackendAdapter::getLatestStateCovariance() {
+  return pimpl_->getLatestStateCovariance();
+}
+
+bool GraphTimeCentricBackendAdapter::addIMUMeasurement(const ImuAccGyr& imu_measurement) {
+  return pimpl_->addIMUMeasurement(imu_measurement);
+}
+
+size_t GraphTimeCentricBackendAdapter::addIMUMeasurements(const std::vector<ImuAccGyr>& imu_measurements) {
+  return pimpl_->addIMUMeasurements(imu_measurements);
+}
+
+bool GraphTimeCentricBackendAdapter::addIMUTimestamps(const std::vector<double>& imu_timestamps) {
+  return pimpl_->addIMUTimestamps(imu_timestamps);
+}
+
+bool GraphTimeCentricBackendAdapter::preintegrateIMUBetweenStates(Timestamp t_i, Timestamp t_j) {
+  return pimpl_->preintegrateIMUBetweenStates(t_i, t_j);
+}
+
+bool GraphTimeCentricBackendAdapter::addKeyframeState(Timestamp timestamp, const gtsam::Pose3& pose_estimate) {
+  return pimpl_->addKeyframeState(timestamp, pose_estimate);
+}
+
+bool GraphTimeCentricBackendAdapter::addKeyframeState(Timestamp timestamp, const gtsam::NavState& nav_state) {
+  return pimpl_->addKeyframeState(timestamp, nav_state);
+}
+
+bool GraphTimeCentricBackendAdapter::addStateValues(unsigned long frame_id, double timestamp, const gtsam::NavState& navstate) {
+  return pimpl_->addStateValues(frame_id, timestamp, navstate);
+}
+
+size_t GraphTimeCentricBackendAdapter::getNumStates() const {
+  return pimpl_->getNumStates();
+}
+
+size_t GraphTimeCentricBackendAdapter::getNumBufferedIMU() const {
+  return pimpl_->getNumBufferedIMU();
+}
+
+size_t GraphTimeCentricBackendAdapter::getNumBufferedStates() const {
+  return pimpl_->getNumBufferedStates();
+}
+
+std::string GraphTimeCentricBackendAdapter::getStatistics() const {
+  return pimpl_->getStatistics();
+}
+
 double GraphTimeCentricBackendAdapter::timestampToSeconds(const Timestamp& timestamp) const {
-  // Kimera timestamps are in nanoseconds
-  return static_cast<double>(timestamp) / 1e9;
+  return pimpl_->timestampToSeconds(timestamp);
 }
 
-// TODO(KIMERA_ADAPTER_14): Helper - Create integration parameters from Kimera params
-fgo::integration::IntegrationParameters GraphTimeCentricBackendAdapter::createIntegrationParams() const {
-  fgo::integration::IntegrationParameters params;
-  
-  // Basic settings
-  params.use_imu = true;
-  params.use_gp_motion_prior = backend_params_.addBetweenStereoFactors_;
-  params.optimize_on_add = false;  // We'll trigger optimization manually
-  
-  // Timestamp matching tolerance (100ms default)
-  params.timestamp_tolerance = 0.1;
-  
-  // IMU parameters
-  params.imu_params.gyroscope_noise_density = imu_params_.gyro_noise_;
-  params.imu_params.accelerometer_noise_density = imu_params_.acc_noise_;
-  params.imu_params.gyroscope_random_walk = imu_params_.gyro_walk_;
-  params.imu_params.accelerometer_random_walk = imu_params_.acc_walk_;
-  params.imu_params.integration_uncertainty = imu_params_.imu_integration_sigma_;
-  
-  // Gravity magnitude (if available)
-  params.imu_params.gravity_magnitude = 9.81;  // TODO: get from params if available
-  
-  // GP motion prior settings (if enabled)
-  if (params.use_gp_motion_prior) {
-    params.gp_params.qc_model = "WhiteNoise";  // or get from backend_params
-    params.gp_params.sigma_position = 0.1;     // TODO: configure from params
-    params.gp_params.sigma_rotation = 0.05;
-  }
-  
-  // Optimization settings
-  params.optimization_params.max_iterations = 100;
-  params.optimization_params.lambda_initial = 1e-5;
-  params.optimization_params.lambda_factor = 10.0;
-  params.optimization_params.relative_error_threshold = 1e-5;
-  params.optimization_params.absolute_error_threshold = 1e-5;
-  
-  LOG(INFO) << "GraphTimeCentricBackendAdapter: created integration params:"
-            << " use_imu=" << params.use_imu
-            << ", use_gp=" << params.use_gp_motion_prior
-            << ", tolerance=" << params.timestamp_tolerance;
-  
-  return params;
+Timestamp GraphTimeCentricBackendAdapter::secondsToTimestamp(double seconds) const {
+  return pimpl_->secondsToTimestamp(seconds);
 }
 
-// TODO(KIMERA_ADAPTER_15): Helper - Find state handle near given timestamp
-std::optional<fgo::integration::StateHandle> 
-GraphTimeCentricBackendAdapter::findStateHandleNearTimestamp(double timestamp) const {
-#ifdef ENABLE_GRAPH_TIME_CENTRIC_ADAPTER
-  if (state_timestamps_.empty()) {
-    return std::nullopt;
-  }
-  
-  // Find closest timestamp
-  auto it = std::min_element(state_timestamps_.begin(), state_timestamps_.end(),
-                             [timestamp](double a, double b) {
-                               return std::abs(a - timestamp) < std::abs(b - timestamp);
-                             });
-  
-  if (it == state_timestamps_.end()) {
-    return std::nullopt;
-  }
-  
-  const double closest_time = *it;
-  const double tolerance = 0.1;  // 100ms tolerance
-  
-  if (std::abs(closest_time - timestamp) > tolerance) {
-    LOG(WARNING) << "GraphTimeCentricBackendAdapter: closest timestamp " << closest_time 
-                 << " is too far from requested " << timestamp 
-                 << " (diff: " << std::abs(closest_time - timestamp) << "s)";
-    return std::nullopt;
-  }
-  
-  // Create state handle with estimated index
-  const size_t state_index = std::distance(state_timestamps_.begin(), it);
-  
-  fgo::integration::StateHandle handle;
-  handle.timestamp = closest_time;
-  handle.state_index = state_index;
-  
-  return handle;
-#else
-  return std::nullopt;
-#endif
-}
-
-}  // namespace VIO
+} // namespace VIO

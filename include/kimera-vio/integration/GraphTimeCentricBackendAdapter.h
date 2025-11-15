@@ -101,9 +101,6 @@ public:
    * @param app_interface Application interface from online_fgo_core
    * @return true if initialization successful
    * 
-   * TODO: Create KimeraIntegrationInterface with app_interface
-   * TODO: Convert backend_params and imu_params to KimeraIntegrationParams
-   * TODO: Call integration_interface_->initialize()
    */
   bool initialize(fgo::core::ApplicationInterface* app_interface);
 
@@ -111,7 +108,6 @@ public:
    * @brief Initialize with default standalone application
    * @return true if initialization successful
    * 
-   * TODO: Create standalone ApplicationInterface for testing
    */
   bool initializeStandalone();
 
@@ -198,18 +194,10 @@ public:
   // ========================================================================
 
   /**
-   * @brief Add a single IMU measurement
-   * 
-   * Called by VioBackend for each IMU measurement. Measurements are buffered
-   * and forwarded to GraphTimeCentric.
-   * 
-   * @param imu_measurement IMU acc/gyro measurement
-   * @return true if successfully buffered
-   * 
-   * TODO: Extract timestamp, accel, gyro from ImuAccGyr struct
-   * TODO: Compute dt from previous measurement
-   * TODO: Call integration_interface_->addIMUData()
-   * TODO: Buffer measurement for preintegration between states
+   * @brief Add single IMU measurement to be used for preintegration
+   * @param timestamp Timestamp of the measurement
+   * @param linear_acceleration Raw accelerometer measurement
+   * @param angular_velocity Raw gyroscope measurement
    */
   bool addIMUMeasurement(const ImuAccGyr& imu_measurement);
 
@@ -217,8 +205,6 @@ public:
    * @brief Add multiple IMU measurements in batch
    * @param imu_measurements Vector of IMU measurements
    * @return Number of measurements successfully added
-   * 
-   * TODO: Batch process and call integration_interface_->addIMUDataBatch()
    */
   size_t addIMUMeasurements(const std::vector<ImuAccGyr>& imu_measurements);
 
@@ -239,8 +225,8 @@ public:
    * @param t_j End timestamp
    * @return true if preintegration successful
    * 
-   * TODO: Extract IMU measurements from buffer in time range [t_i, t_j]
-   * TODO: Call GraphTimeCentric IMU factor creation methods
+   * NOTE: Preintegration is handled automatically by GraphTimeCentric.
+   * This method is currently a no-op.
    */
   bool preintegrateIMUBetweenStates(Timestamp t_i, Timestamp t_j);
 
@@ -255,10 +241,7 @@ public:
    * 
    * @return true if optimization successful
    * 
-   * TODO: Call integration_interface_->optimize()
-   * TODO: Check OptimizationResult for success
-   * TODO: Update internal state tracking
-   * TODO: Trigger callbacks if optimization failed
+   * NOTE: Optimization failure callbacks not yet implemented
    */
   bool optimizeGraph();
 
@@ -283,25 +266,18 @@ public:
    * @brief Get optimized NavState at specific timestamp
    * @param timestamp Timestamp to query
    * @return NavState if available at that time
-   * 
-   * TODO: Find state handle for timestamp (within tolerance)
-   * TODO: Call integration_interface_->getOptimizedState()
    */
   std::optional<gtsam::NavState> getStateAtTime(Timestamp timestamp);
 
   /**
    * @brief Get latest optimized NavState
    * @return Most recent NavState after optimization
-   * 
-   * TODO: Call integration_interface_->getLatestOptimizedState()
    */
   std::optional<gtsam::NavState> getLatestState();
 
   /**
    * @brief Get latest optimized IMU bias
    * @return Most recent bias estimate
-   * 
-   * TODO: Call integration_interface_->getLatestOptimizedBias()
    */
   std::optional<gtsam::imuBias::ConstantBias> getLatestIMUBias();
 
@@ -309,8 +285,6 @@ public:
    * @brief Get state covariance at timestamp
    * @param timestamp Timestamp to query
    * @return Covariance matrix if available
-   * 
-   * TODO: Find state handle and call integration_interface_->getStateCovariance()
    */
   std::optional<gtsam::Matrix> getStateCovariance(Timestamp timestamp);
 
@@ -334,126 +308,51 @@ public:
    * @brief Get number of states in graph
    * @return State count
    */
-  size_t getNumStates() const { return num_states_; }
+  size_t getNumStates() const;
 
   /**
    * @brief Get number of IMU measurements buffered
    * @return IMU buffer size
    */
-  size_t getNumBufferedIMU() const {
-    std::lock_guard<std::mutex> lock(buffer_mutex_);
-    return imu_buffer_.size();
-  }
+  size_t getNumBufferedIMU() const;
 
   /**
    * @brief Get number of non-keyframe states buffered
    * @return Non-keyframe buffer size
    */
-  size_t getNumBufferedStates() const {
-    std::lock_guard<std::mutex> lock(state_buffer_mutex_);
-    return non_keyframe_buffer_.size();
-  }
+  size_t getNumBufferedStates() const;
 
   /**
    * @brief Get statistics string for logging
    * @return Formatted statistics string
    */
   std::string getStatistics() const;
-
-private:
-  // ========================================================================
-  // MEMBER VARIABLES
-  // ========================================================================
-
-  // Parameters
-  BackendParams backend_params_;
-  ImuParams imu_params_;
-
-  // Integration interface to online_fgo_core
-  std::unique_ptr<fgo::integration::KimeraIntegrationInterface> integration_interface_;
-
-  // Application interface (owned by caller, not this class)
-  fgo::core::ApplicationInterface* app_interface_ = nullptr;
-  std::unique_ptr<fgo::core::ApplicationInterface> standalone_app_;  // For standalone mode
-
-  // Initialization flag
-  bool initialized_ = false;
-
-  // IMU measurement buffer
-  std::deque<ImuAccGyr> imu_buffer_;
-  mutable std::mutex buffer_mutex_;
-
-  // Non-keyframe buffer structure
-  struct BufferedState {
-    Timestamp timestamp;
-    gtsam::Pose3 pose;
-    gtsam::Vector3 velocity;
-    gtsam::imuBias::ConstantBias bias;
-    
-    // For sorting by timestamp
-    bool operator<(const BufferedState& other) const {
-      return timestamp < other.timestamp;
-    }
-  };
   
-  // Buffer for non-keyframe states (to be added when next keyframe arrives)
-  std::vector<BufferedState> non_keyframe_buffer_;
-  mutable std::mutex state_buffer_mutex_;
-
-  // State tracking
-  std::map<Timestamp, fgo::integration::StateHandle> keyframe_states_;
-  std::vector<double> state_timestamps_;  // All timestamps (keyframes + non-keyframes) in order
-  size_t num_states_ = 0;
-
-  // Timing
-  double last_optimization_time_ = 0.0;
-  Timestamp last_imu_timestamp_{0};
-
-  // Last optimization result (for getLastResult)
-  gtsam::Values last_result_;
-
   // ========================================================================
-  // HELPER METHODS
+  // HELPER METHODS (public for timestamp conversion)
   // ========================================================================
-
+  
   /**
    * @brief Convert Kimera Timestamp to double seconds
-   * @param timestamp Kimera timestamp
+   * @param timestamp Kimera timestamp (nanoseconds)
    * @return Time in seconds
-   * 
-   * TODO: Implement based on Kimera's Timestamp type
-   * TODO: Handle nanoseconds or microseconds conversion
    */
-  double timestampToSeconds(Timestamp timestamp) const;
+  double timestampToSeconds(const Timestamp& timestamp) const;
 
   /**
    * @brief Convert double seconds to Kimera Timestamp
    * @param seconds Time in seconds
-   * @return Kimera timestamp
-   * 
-   * TODO: Reverse conversion of timestampToSeconds
+   * @return Kimera timestamp (nanoseconds)
    */
   Timestamp secondsToTimestamp(double seconds) const;
 
-  /**
-   * @brief Create KimeraIntegrationParams from Kimera parameters
-   * @return Integration parameters
-   * 
-   * TODO: Map BackendParams and ImuParams to KimeraIntegrationParams
-   * TODO: Set smoother_lag, GP prior settings, etc.
-   */
-  fgo::integration::KimeraIntegrationParams createIntegrationParams() const;
-
-  /**
-   * @brief Find state handle closest to timestamp
-   * @param timestamp Target timestamp
-   * @param tolerance Max time difference in seconds
-   * @return State handle if found
-   * 
-   * TODO: Search keyframe_states_ for nearest timestamp
-   */
-  std::optional<fgo::integration::StateHandle> findStateHandleNearTimestamp(
-      Timestamp timestamp, double tolerance = 0.001) const;
+private:
+  // ========================================================================
+  // PIMPL PATTERN - Hide implementation details
+  // ========================================================================
+  
+  class Impl;  // Forward declaration of implementation class
+  std::unique_ptr<Impl> pimpl_;  // Pointer to implementation
 };
 
 } // namespace VIO
