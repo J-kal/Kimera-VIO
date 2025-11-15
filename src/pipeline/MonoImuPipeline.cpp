@@ -91,19 +91,34 @@ MonoImuPipeline::MonoImuPipeline(const VioParams& params,
         auto converted_output =
             std::dynamic_pointer_cast<MonoFrontendOutput>(output);
         CHECK(converted_output);
-        if (converted_output->is_keyframe_) {
-          //! Only push to Backend input queue if it is a keyframe!
-          backend_input_queue.push(std::make_unique<BackendInput>(
-              converted_output->frame_lkf_.timestamp_,
-              converted_output->status_mono_measurements_,
-              converted_output->pim_,
-              converted_output->imu_acc_gyrs_,
-              converted_output->body_lkf_OdomPose_body_kf_,
-              converted_output->body_kf_world_OdomVel_body_kf_));
-        } else {
-          VLOG(5)
-              << "Frontend did not output a keyframe, skipping Backend input.";
+        
+        // BUFFERING DISABLED: Only push keyframes to backend
+        // The GraphTimeCentric adapter works directly with keyframe timestamps and IMU data.
+        // 
+        // TO RESTORE NON-KEYFRAME BUFFERING:
+        // 1. Remove the is_keyframe check below
+        // 2. Push all frames: backend_input_queue.push(std::make_unique<BackendInput>(...));
+        // 3. Restore buffer logic in VioBackend.cpp (see comments there)
+        // 4. Restore buffer processing in GraphTimeCentricBackendAdapter.cpp
+        
+        if (!converted_output->is_keyframe_) {
+          VLOG(5) << "Frontend output non-keyframe at t=" << converted_output->timestamp_ 
+                  << ", skipping (buffering disabled).";
+          return;  // Skip non-keyframes
         }
+        
+        // Only push keyframes
+        backend_input_queue.push(std::make_unique<BackendInput>(
+            converted_output->timestamp_,
+            converted_output->status_mono_measurements_,
+            converted_output->pim_,
+            converted_output->imu_acc_gyrs_,
+            converted_output->body_lkf_OdomPose_body_kf_,
+            converted_output->body_kf_world_OdomVel_body_kf_,
+            converted_output->is_keyframe_));
+        
+        VLOG(5) << "Frontend output keyframe at t=" << converted_output->timestamp_ 
+                << ", pushed to Backend.";
       });
 
   //! Params for what the Backend outputs.

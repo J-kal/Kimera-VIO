@@ -258,7 +258,7 @@ class VioBackend {
 
 #ifdef ENABLE_GRAPH_TIME_CENTRIC_ADAPTER
   // Optional adapter used when runtime flag is enabled.
-  std::unique_ptr<kimera::integration::GraphTimeCentricBackendAdapter>
+  std::unique_ptr<GraphTimeCentricBackendAdapter>
       graph_time_centric_adapter_;
 #endif
 

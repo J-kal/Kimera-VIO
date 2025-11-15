@@ -238,13 +238,15 @@ struct BackendInput : public PipelinePayload {
       const ImuAccGyrS& imu_acc_gyrs,
       std::optional<gtsam::Pose3> body_lkf_OdomPose_body_kf = std::nullopt,
       std::optional<gtsam::Velocity3> body_kf_world_OdomVel_body_kf =
-          std::nullopt)
+          std::nullopt,
+      bool is_keyframe = true)
       : PipelinePayload(timestamp_kf_nsec),
         status_stereo_measurements_kf_(status_stereo_measurements_kf),
         pim_(pim),
         imu_acc_gyrs_(imu_acc_gyrs),
         body_lkf_OdomPose_body_kf_(body_lkf_OdomPose_body_kf),
-        body_kf_world_OdomVel_body_kf_(body_kf_world_OdomVel_body_kf) {}
+        body_kf_world_OdomVel_body_kf_(body_kf_world_OdomVel_body_kf),
+        is_keyframe_(is_keyframe) {}
 
  public:
   const StatusStereoMeasurementsPtr status_stereo_measurements_kf_;
@@ -255,6 +257,7 @@ struct BackendInput : public PipelinePayload {
   // velocity of the current keyframe body w.r.t. the world frame in the body
   // frame
   std::optional<gtsam::Velocity3> body_kf_world_OdomVel_body_kf_;
+  bool is_keyframe_;  // Flag to distinguish keyframes from non-keyframes
 
  public:
   void print() const {

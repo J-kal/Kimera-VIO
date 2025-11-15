@@ -138,10 +138,12 @@ VioBackend::VioBackend(const gtsam::Pose3& B_Pose_leftCamRect,
   if (backend_params_.use_graph_time_centric) {
 #ifdef ENABLE_GRAPH_TIME_CENTRIC_ADAPTER
     graph_time_centric_adapter_ =
-        std::make_unique<kimera::integration::GraphTimeCentricBackendAdapter>();
-    if (!graph_time_centric_adapter_->initializeAdapter()) {
+        std::make_unique<GraphTimeCentricBackendAdapter>(
+            backend_params_, imu_params_);
+    if (!graph_time_centric_adapter_->initialize()) {
       LOG(FATAL) << "Failed to initialize GraphTimeCentric adapter.";
     }
+    LOG(INFO) << "GraphTimeCentric adapter initialized successfully";
 #else
     LOG(FATAL)
         << "BackendParams.use_graph_time_centric is true but the adapter was not built."
@@ -159,6 +161,19 @@ BackendOutput::UniquePtr VioBackend::spinOnce(const BackendInput& input) {
   if (logger_) {
     logger_->logBackendExtOdom(input);
   }
+
+  // BUFFERING DISABLED: All frames reaching here should be keyframes
+  // Pipeline filters out non-keyframes before pushing to backend.
+  //
+  // TO RESTORE NON-KEYFRAME BUFFERING:
+  // Uncomment the following block to buffer non-keyframes without producing output:
+  /*
+  if (!input.is_keyframe_) {
+    VLOG(2) << "Backend received non-keyframe, will buffer without producing output";
+    addVisualInertialStateAndOptimize(input);
+    return nullptr;  // No output for non-keyframes
+  }
+  */
 
   bool backend_status = false;
   const BackendState backend_state = backend_state_;
@@ -444,8 +459,84 @@ bool VioBackend::addVisualInertialStateAndOptimize(
 
 bool VioBackend::addVisualInertialStateAndOptimize(const BackendInput& input) {
   VLOG(10) << "Add visual inertial state and optimize.";
-  CHECK(input.status_stereo_measurements_kf_);
   CHECK(input.pim_);
+  
+#ifdef ENABLE_GRAPH_TIME_CENTRIC_ADAPTER
+  // BUFFERING DISABLED: GraphTimeCentric adapter processes keyframes only
+  // Pipeline filters non-keyframes, so all frames here are keyframes.
+  // IMU data comes directly from keyframe measurements.
+  //
+  // TO RESTORE NON-KEYFRAME BUFFERING:
+  // 1. Restore the 'if (!input.is_keyframe_)' branch below
+  // 2. Call graph_time_centric_adapter_->bufferNonKeyframeState() for non-keyframes
+  // 3. Update addKeyframeState() to process buffered states (see adapter code)
+  
+  if (backend_params_.use_graph_time_centric && graph_time_centric_adapter_) {
+    VLOG(2) << "Using GraphTimeCentric adapter for keyframe processing";
+    
+    // Extract state estimate from preintegration
+    gtsam::NavState navstate_lkf(W_Pose_B_lkf_from_state_, W_Vel_B_lkf_);
+    const gtsam::NavState& navstate_k = input.pim_->predict(navstate_lkf, imu_bias_lkf_);
+    
+    // Forward IMU measurements to adapter
+    for (const auto& imu_meas : input.imu_acc_gyrs_) {
+      graph_time_centric_adapter_->addIMUMeasurement(
+          imu_meas.timestamp_,
+          imu_meas.imu_acc_,
+          imu_meas.imu_gyr_);
+    }
+    
+    // Process keyframe only (buffering disabled)
+    CHECK(input.is_keyframe_) << "Non-keyframe should not reach backend with buffering disabled";
+    
+    VLOG(1) << "Processing KEYFRAME at t=" 
+            << UtilsNumerical::NsecToSec(input.timestamp_);
+    
+    // Add keyframe state directly (no buffer processing)
+    graph_time_centric_adapter_->addKeyframeState(
+        input.timestamp_,
+        navstate_k.pose(),
+        navstate_k.velocity(),
+        imu_bias_lkf_);
+    
+    // Trigger optimization
+    bool optimization_success = graph_time_centric_adapter_->optimizeGraph();
+    
+    if (optimization_success) {
+      // Retrieve optimized state
+      const double timestamp_sec = static_cast<double>(input.timestamp_) / 1e9;
+      
+      auto opt_pose = graph_time_centric_adapter_->getOptimizedPoseAtTime(timestamp_sec);
+      auto opt_vel = graph_time_centric_adapter_->getOptimizedVelocityAtTime(timestamp_sec);
+      auto opt_bias = graph_time_centric_adapter_->getOptimizedBiasAtTime(timestamp_sec);
+      
+      if (opt_pose && opt_vel && opt_bias) {
+        // Update backend state with optimized values
+        W_Pose_B_lkf_from_state_ = *opt_pose;
+        W_Vel_B_lkf_ = *opt_vel;
+        imu_bias_lkf_ = *opt_bias;
+        
+        VLOG(2) << "Updated backend state from GraphTimeCentric optimization";
+      } else {
+        LOG(WARNING) << "Failed to retrieve optimized state from GraphTimeCentric";
+      }
+    } else {
+      LOG(WARNING) << "GraphTimeCentric optimization failed";
+    }
+    
+    // Update bookkeeping
+    last_kf_id_ = curr_kf_id_;
+    ++curr_kf_id_;
+    timestamp_lkf_ = input.timestamp_;
+    
+    return optimization_success;
+  }
+#endif
+  
+  // Default path: use native Kimera backend (keyframes only)
+  CHECK(input.is_keyframe_) << "Only keyframes should reach backend";
+  
+  CHECK(input.status_stereo_measurements_kf_);
   bool is_smoother_ok = addVisualInertialStateAndOptimize(
       input.timestamp_,  // Current time for fixed lag smoother.
       *input.status_stereo_measurements_kf_,  // Vision data.

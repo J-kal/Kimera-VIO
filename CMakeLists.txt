@@ -87,11 +87,29 @@ add_subdirectory(src/frontend)
 ### Add source code for Backend.
 add_subdirectory(include/kimera-vio/backend)
 add_subdirectory(src/backend)
+
+# Integration code for GraphTimeCentric adapter
 if(ENABLE_GRAPH_TIME_CENTRIC_ADAPTER)
-  add_subdirectory(include/kimera-vio/integration)
-  add_subdirectory(src/integration)
+  message(STATUS "Building with GraphTimeCentric adapter support")
+  
+  # Add integration source files directly
+  target_sources(${PROJECT_NAME} PRIVATE
+    src/integration/GraphTimeCentricBackendAdapter.cpp
+  )
+  
+  # Add integration headers to include directories (already handled by main target)
   target_compile_definitions(${PROJECT_NAME} PRIVATE ENABLE_GRAPH_TIME_CENTRIC_ADAPTER)
+  
+  # Link against online_fgo_core if available
+  find_package(online_fgo_core QUIET)
+  if(online_fgo_core_FOUND)
+    target_link_libraries(${PROJECT_NAME} PRIVATE online_fgo_core::online_fgo_core)
+    message(STATUS "Found online_fgo_core, linking against it")
+  else()
+    message(WARNING "online_fgo_core not found - GraphTimeCentric adapter will not function")
+  endif()
 endif()
+
 ### Add source code for factors
 add_subdirectory(include/kimera-vio/factors)
 add_subdirectory(src/factors)
@@ -186,7 +204,7 @@ else()
   set(KIMERA_BUILD_TESTS_DEFAULT ON)
 endif()
 option(KIMERA_BUILD_TESTS "Build tests" ${KIMERA_BUILD_TESTS_DEFAULT})
-option(ENABLE_GRAPH_TIME_CENTRIC_ADAPTER "Enable GraphTimeCentric adapter" OFF)
+option(ENABLE_GRAPH_TIME_CENTRIC_ADAPTER "Enable GraphTimeCentric adapter" ON)
 if(KIMERA_BUILD_TESTS)
   # Download and unpack googletest at configure time
   # TODO Consider doing the same for glog, gflags, although it might
