@@ -169,6 +169,9 @@ bool BackendParams::parseYAMLVioBackendParams(const YamlParser& yaml_parser) {
   yaml_parser.getYamlParam("mono_translation_scale_factor",
                            &mono_translation_scale_factor_);
 
+  // GraphTimeCentric adapter toggle
+  yaml_parser.getYamlParam("use_graph_time_centric", &use_graph_time_centric);
+
   return true;
 }
 
