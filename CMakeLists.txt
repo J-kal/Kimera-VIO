@@ -93,31 +93,26 @@ add_subdirectory(src/frontend)
 add_subdirectory(include/kimera-vio/backend)
 add_subdirectory(src/backend)
 
-# Integration code for GraphTimeCentric adapter
-if(ENABLE_GRAPH_TIME_CENTRIC_ADAPTER)
-  message(STATUS "Building with GraphTimeCentric adapter support")
-  
-  # Add integration source files directly
-  target_sources(${PROJECT_NAME} PRIVATE
-    src/integration/GraphTimeCentricBackendAdapter.cpp
+# Integration code for GraphTimeCentric adapter (always built, controlled at runtime)
+message(STATUS "Building with GraphTimeCentric adapter support")
+
+# Add integration source files directly
+target_sources(${PROJECT_NAME} PRIVATE
+  src/integration/GraphTimeCentricBackendAdapter.cpp
+)
+
+# Link against online_fgo_core if available
+find_package(online_fgo_core QUIET)
+if(online_fgo_core_FOUND)
+  target_link_libraries(${PROJECT_NAME} PRIVATE 
+    online_fgo_core::online_fgo_integrator
+    online_fgo_core::online_fgo_graph
+    online_fgo_core::online_fgo_interface
+    online_fgo_core::online_fgo_data
   )
-  
-  # Add integration headers to include directories (already handled by main target)
-  target_compile_definitions(${PROJECT_NAME} PRIVATE ENABLE_GRAPH_TIME_CENTRIC_ADAPTER)
-  
-  # Link against online_fgo_core if available
-  find_package(online_fgo_core QUIET)
-  if(online_fgo_core_FOUND)
-    target_link_libraries(${PROJECT_NAME} PRIVATE 
-      online_fgo_core::online_fgo_integrator
-      online_fgo_core::online_fgo_graph
-      online_fgo_core::online_fgo_interface
-      online_fgo_core::online_fgo_data
-    )
-    message(STATUS "Found online_fgo_core, linking against it")
-  else()
-    message(WARNING "online_fgo_core not found - GraphTimeCentric adapter will not function")
-  endif()
+  message(STATUS "Found online_fgo_core, linking against it")
+else()
+  message(WARNING "online_fgo_core not found - GraphTimeCentric adapter will not function at runtime")
 endif()
 
 ### Add source code for factors
@@ -223,7 +218,7 @@ add_library(kimera_vio::kimera_vio ALIAS kimera_vio)
 #   set(KIMERA_BUILD_TESTS_DEFAULT ON)
 # endif()
 # option(KIMERA_BUILD_TESTS "Build tests" ${KIMERA_BUILD_TESTS_DEFAULT})
-option(ENABLE_GRAPH_TIME_CENTRIC_ADAPTER "Enable GraphTimeCentric adapter" ON)
+# Note: GraphTimeCentric adapter is now always built and controlled at runtime via use_graph_time_centric parameter
 if(FALSE)  # Disabled tests for faster builds
   # Download and unpack googletest at configure time
   # TODO Consider doing the same for glog, gflags, although it might

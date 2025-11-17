@@ -1,4 +1,7 @@
 %YAML:1.0
+
+# only works with VioBackend & requires online_fgo_core
+use_graph_time_centric:1
 # Backend modality for regular VIO
 # 0: Structureless factors only, 4: SPR pipeline
 backend_modality: 0

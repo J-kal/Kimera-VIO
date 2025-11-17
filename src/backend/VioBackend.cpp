@@ -136,7 +136,6 @@ VioBackend::VioBackend(const gtsam::Pose3& B_Pose_leftCamRect,
 
   // Optional GraphTimeCentric adapter initialization (runtime toggle)
   if (backend_params_.use_graph_time_centric) {
-#ifdef ENABLE_GRAPH_TIME_CENTRIC_ADAPTER
     graph_time_centric_adapter_ =
         std::make_unique<GraphTimeCentricBackendAdapter>(
             backend_params_, imu_params_);
@@ -144,11 +143,6 @@ VioBackend::VioBackend(const gtsam::Pose3& B_Pose_leftCamRect,
       LOG(FATAL) << "Failed to initialize GraphTimeCentric adapter.";
     }
     LOG(INFO) << "GraphTimeCentric adapter initialized successfully";
-#else
-    LOG(FATAL)
-        << "BackendParams.use_graph_time_centric is true but the adapter was not built."
-        << " Build with -DENABLE_GRAPH_TIME_CENTRIC_ADAPTER=ON to enable.";
-#endif
   }
 }
 
@@ -461,7 +455,6 @@ bool VioBackend::addVisualInertialStateAndOptimize(const BackendInput& input) {
   VLOG(10) << "Add visual inertial state and optimize.";
   CHECK(input.pim_);
   
-#ifdef ENABLE_GRAPH_TIME_CENTRIC_ADAPTER
   // BUFFERING DISABLED: GraphTimeCentric adapter processes keyframes only
   // Pipeline filters non-keyframes, so all frames here are keyframes.
   // IMU data comes directly from keyframe measurements.
@@ -528,7 +521,6 @@ bool VioBackend::addVisualInertialStateAndOptimize(const BackendInput& input) {
     
     return optimization_success;
   }
-#endif
   
   // Default path: use native Kimera backend (keyframes only)
   CHECK(input.is_keyframe_) << "Only keyframes should reach backend";

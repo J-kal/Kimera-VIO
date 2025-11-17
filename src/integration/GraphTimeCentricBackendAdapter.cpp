@@ -96,8 +96,6 @@ class GraphTimeCentricBackendAdapter::Impl {
 // ENABLED IMPLEMENTATION - Full integration with online_fgo_core
 // ============================================================================
 
-#ifdef ENABLE_GRAPH_TIME_CENTRIC_ADAPTER
-
 #include "online_fgo_core/integration/KimeraIntegrationInterface.h"
 #include "online_fgo_core/interface/ApplicationInterface.h"
 #include "online_fgo_core/interface/LoggerInterface.h"
@@ -631,193 +629,17 @@ private:
 
 } // namespace VIO
 
-#else // ENABLE_GRAPH_TIME_CENTRIC_ADAPTER not defined
-
-// ============================================================================
-// STUB IMPLEMENTATION - Disabled adapter (logs warnings)
-// ============================================================================
-
-namespace VIO {
-
-class GraphTimeCentricBackendAdapterStub : public GraphTimeCentricBackendAdapter::Impl {
-public:
-  GraphTimeCentricBackendAdapterStub(const BackendParams& /*backend_params*/,
-                                     const ImuParams& /*imu_params*/) {
-    LOG(WARNING) << "GraphTimeCentricBackendAdapter: created (DISABLED - stub implementation)";
-  }
-  
-  ~GraphTimeCentricBackendAdapterStub() override = default;
-  
-  bool initialize() override {
-    LOG(WARNING) << "GraphTimeCentricBackendAdapter: DISABLED - initialize() called";
-    return false;
-  }
-  
-  bool isInitialized() const override {
-    return false;
-  }
-  
-  bool bufferNonKeyframeState(const Timestamp&, const gtsam::Pose3&,
-                             const gtsam::Vector3&, const gtsam::imuBias::ConstantBias&) override {
-    LOG_DISABLED();
-    return false;
-  }
-  
-  void addKeyframeState(const Timestamp&, const gtsam::Pose3&,
-                       const gtsam::Vector3&, const gtsam::imuBias::ConstantBias&) override {
-    LOG_DISABLED();
-  }
-  
-  bool optimizeGraph() override {
-    LOG_DISABLED();
-    return false;
-  }
-  
-  double getLastOptimizationTime() const override {
-    return 0.0;
-  }
-  
-  std::optional<gtsam::Pose3> getOptimizedPoseAtTime(double) const override {
-    LOG_DISABLED();
-    return std::nullopt;
-  }
-  
-  std::optional<gtsam::Vector3> getOptimizedVelocityAtTime(double) const override {
-    LOG_DISABLED();
-    return std::nullopt;
-  }
-  
-  std::optional<gtsam::imuBias::ConstantBias> getOptimizedBiasAtTime(double) const override {
-    LOG_DISABLED();
-    return std::nullopt;
-  }
-  
-  std::optional<gtsam::Matrix> getStateCovarianceAtTime(double) const override {
-    LOG_DISABLED();
-    return std::nullopt;
-  }
-  
-  gtsam::Values getLastResult() override {
-    LOG_DISABLED();
-    return gtsam::Values();
-  }
-  
-  std::optional<gtsam::NavState> getStateAtTime(Timestamp) override {
-    LOG_DISABLED();
-    return std::nullopt;
-  }
-  
-  std::optional<gtsam::NavState> getLatestState() override {
-    LOG_DISABLED();
-    return std::nullopt;
-  }
-  
-  std::optional<gtsam::imuBias::ConstantBias> getLatestIMUBias() override {
-    LOG_DISABLED();
-    return std::nullopt;
-  }
-  
-  std::optional<gtsam::Matrix> getStateCovariance(Timestamp) override {
-    LOG_DISABLED();
-    return std::nullopt;
-  }
-  
-  std::optional<gtsam::Matrix> getLatestStateCovariance() override {
-    LOG_DISABLED();
-    return std::nullopt;
-  }
-  
-  bool addIMUMeasurement(const ImuAccGyr&) override {
-    LOG_DISABLED();
-    return false;
-  }
-  
-  size_t addIMUMeasurements(const std::vector<ImuAccGyr>&) override {
-    LOG_DISABLED();
-    return 0;
-  }
-  
-  bool addIMUTimestamps(const std::vector<double>&) override {
-    LOG_DISABLED();
-    return false;
-  }
-  
-  bool preintegrateIMUBetweenStates(Timestamp, Timestamp) override {
-    LOG_DISABLED();
-    return false;
-  }
-  
-  bool addKeyframeState(Timestamp, const gtsam::Pose3&) override {
-    LOG_DISABLED();
-    return false;
-  }
-  
-  bool addKeyframeState(Timestamp, const gtsam::NavState&) override {
-    LOG_DISABLED();
-    return false;
-  }
-  
-  bool addStateValues(unsigned long, double, const gtsam::NavState&) override {
-    LOG_DISABLED();
-    return false;
-  }
-  
-  size_t getNumStates() const override {
-    return 0;
-  }
-  
-  size_t getNumBufferedIMU() const override {
-    return 0;
-  }
-  
-  size_t getNumBufferedStates() const override {
-    return 0;
-  }
-  
-  std::string getStatistics() const override {
-    return "GraphTimeCentricBackendAdapter: DISABLED (stub implementation)\n";
-  }
-  
-  double timestampToSeconds(const Timestamp& timestamp) const override {
-    return static_cast<double>(timestamp) / 1e9;
-  }
-  
-  Timestamp secondsToTimestamp(double seconds) const override {
-    return static_cast<Timestamp>(seconds * 1e9);
-  }
-
-private:
-  void LOG_DISABLED() const {
-    static int call_count = 0;
-    if (++call_count % 100 == 1) {  // Log every 100th call to avoid spam
-      LOG(WARNING) << "GraphTimeCentricBackendAdapter: DISABLED - operation skipped "
-                   << "(logged every 100 calls)";
-    }
-  }
-};
-
-} // namespace VIO
-
-#endif // ENABLE_GRAPH_TIME_CENTRIC_ADAPTER
-
 // ============================================================================
 // PUBLIC WRAPPER IMPLEMENTATION - Uses PIMPL pattern
 // ============================================================================
 
 namespace VIO {
 
-// Select implementation at compile time
-#ifdef ENABLE_GRAPH_TIME_CENTRIC_ADAPTER
-  using SelectedImpl = GraphTimeCentricBackendAdapterImpl;
-#else
-  using SelectedImpl = GraphTimeCentricBackendAdapterStub;
-#endif
-
 // Constructor - creates the appropriate implementation
 GraphTimeCentricBackendAdapter::GraphTimeCentricBackendAdapter(
     const BackendParams& backend_params,
     const ImuParams& imu_params)
-    : pimpl_(std::make_unique<SelectedImpl>(backend_params, imu_params)) {
+    : pimpl_(std::make_unique<GraphTimeCentricBackendAdapterImpl>(backend_params, imu_params)) {
 }
 
 // Destructor - defined in .cpp for unique_ptr with forward-declared type
