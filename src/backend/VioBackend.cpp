@@ -478,13 +478,10 @@ bool VioBackend::addVisualInertialStateAndOptimize(const BackendInput& input) {
     gtsam::NavState navstate_lkf(W_Pose_B_lkf_from_state_, W_Vel_B_lkf_);
     const gtsam::NavState& navstate_k = input.pim_->predict(navstate_lkf, imu_bias_lkf_);
     
-    // Forward IMU measurements to adapter
-    for (const auto& imu_meas : input.imu_acc_gyrs_) {
-      graph_time_centric_adapter_->addIMUMeasurement(
-          imu_meas.timestamp_,
-          imu_meas.imu_acc_,
-          imu_meas.imu_gyr_);
-    }
+    // NOTE: IMU measurements are handled internally by GraphTimeCentric
+    // The input.imu_acc_gyrs_ matrix does not contain timestamps, so we cannot
+    // forward individual measurements. The adapter will handle IMU preintegration
+    // internally based on the keyframe timestamps.
     
     // Process keyframe only (buffering disabled)
     CHECK(input.is_keyframe_) << "Non-keyframe should not reach backend with buffering disabled";

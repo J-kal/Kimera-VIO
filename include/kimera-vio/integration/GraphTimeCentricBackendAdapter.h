@@ -98,24 +98,15 @@ public:
 
   /**
    * @brief Initialize the adapter and underlying GraphTimeCentric
-   * @param app_interface Application interface from online_fgo_core
    * @return true if initialization successful
-   * 
    */
-  bool initialize(fgo::core::ApplicationInterface* app_interface);
-
-  /**
-   * @brief Initialize with default standalone application
-   * @return true if initialization successful
-   * 
-   */
-  bool initializeStandalone();
+  bool initialize();
 
   /**
    * @brief Check if adapter is initialized
    * @return true if ready to use
    */
-  bool isInitialized() const { return initialized_; }
+  bool isInitialized() const;
 
   // ========================================================================
   // STATE MANAGEMENT
@@ -256,7 +247,7 @@ public:
    * @brief Get the optimization time from last optimize call
    * @return Optimization time in seconds
    */
-  double getLastOptimizationTime() const { return last_optimization_time_; }
+  double getLastOptimizationTime() const;
 
   // ========================================================================
   // RESULT RETRIEVAL
@@ -268,6 +259,34 @@ public:
    * @return NavState if available at that time
    */
   std::optional<gtsam::NavState> getStateAtTime(Timestamp timestamp);
+
+  /**
+   * @brief Get optimized Pose3 at specific timestamp (seconds)
+   * @param timestamp Timestamp in seconds
+   * @return Pose3 if available
+   */
+  std::optional<gtsam::Pose3> getOptimizedPoseAtTime(double timestamp) const;
+
+  /**
+   * @brief Get optimized velocity at specific timestamp (seconds)
+   * @param timestamp Timestamp in seconds
+   * @return Velocity vector if available
+   */
+  std::optional<gtsam::Vector3> getOptimizedVelocityAtTime(double timestamp) const;
+
+  /**
+   * @brief Get optimized IMU bias at specific timestamp (seconds)
+   * @param timestamp Timestamp in seconds
+   * @return IMU bias if available
+   */
+  std::optional<gtsam::imuBias::ConstantBias> getOptimizedBiasAtTime(double timestamp) const;
+
+  /**
+   * @brief Get state covariance at specific timestamp (seconds)
+   * @param timestamp Timestamp in seconds
+   * @return Covariance matrix if available
+   */
+  std::optional<gtsam::Matrix> getStateCovarianceAtTime(double timestamp) const;
 
   /**
    * @brief Get latest optimized NavState
@@ -346,12 +365,13 @@ public:
    */
   Timestamp secondsToTimestamp(double seconds) const;
 
-private:
   // ========================================================================
   // PIMPL PATTERN - Hide implementation details
   // ========================================================================
   
-  class Impl;  // Forward declaration of implementation class
+  class Impl;  // Forward declaration of implementation class (public for inheritance in .cpp)
+
+private:
   std::unique_ptr<Impl> pimpl_;  // Pointer to implementation
 };
 

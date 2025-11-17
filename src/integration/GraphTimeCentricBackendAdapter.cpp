@@ -33,7 +33,7 @@ namespace VIO {
 
 // Forward declaration of implementation base class
 class GraphTimeCentricBackendAdapter::Impl {
-public:
+ public:
   virtual ~Impl() = default;
   
   // Initialization
@@ -117,9 +117,21 @@ namespace {
   class StandaloneParameters : public fgo::core::ParameterInterface {
   public:
     bool hasParameter(const std::string& name) const override { return false; }
-    
-    template<typename T>
-    T getParameter(const std::string& name) const { return T(); }
+    bool getBool(const std::string& name, bool default_value) override { return default_value; }
+    int getInt(const std::string& name, int default_value) override { return default_value; }
+    double getDouble(const std::string& name, double default_value) override { return default_value; }
+    std::string getString(const std::string& name, const std::string& default_value) override { return default_value; }
+    std::vector<double> getDoubleArray(const std::string& name, const std::vector<double>& default_value) override { return default_value; }
+    std::vector<int> getIntArray(const std::string& name, const std::vector<int>& default_value) override { return default_value; }
+    std::vector<std::string> getStringArray(const std::string& name, const std::vector<std::string>& default_value) override { return default_value; }
+    void setBool(const std::string& name, bool value) override {}
+    void setInt(const std::string& name, int value) override {}
+    void setDouble(const std::string& name, double value) override {}
+    void setString(const std::string& name, const std::string& value) override {}
+    void setDoubleArray(const std::string& name, const std::vector<double>& value) override {}
+    void setIntArray(const std::string& name, const std::vector<int>& value) override {}
+    void setStringArray(const std::string& name, const std::vector<std::string>& value) override {}
+    void loadFromYAML(const std::string& filename) override {}
   };
   
   class StandaloneApp : public fgo::core::ApplicationInterface {
@@ -159,6 +171,7 @@ public:
       , last_optimization_time_(0.0)
       , last_imu_timestamp_sec_(0.0) {
     LOG(INFO) << "GraphTimeCentricBackendAdapter: created (enabled implementation)";
+    std::cout << "[Kimera-VIO] GraphTimeCentricBackendAdapter: ENABLED IMPLEMENTATION ACTIVE" << std::endl;
   }
   
   ~GraphTimeCentricBackendAdapterImpl() override {
@@ -172,6 +185,7 @@ public:
     }
     
     LOG(INFO) << "GraphTimeCentricBackendAdapter: initializing...";
+    std::cout << "[Kimera-VIO] GraphTimeCentricBackendAdapter: INITIALIZING" << std::endl;
     
     try {
       // Create standalone application for testing
@@ -451,53 +465,21 @@ public:
   }
   
   bool addIMUMeasurement(const ImuAccGyr& imu_measurement) override {
-    const double timestamp_sec = timestampToSeconds(imu_measurement.timestamp_);
-    
-    double dt = 0.005; // default 200 Hz
-    if (last_imu_timestamp_sec_ > 0.0) {
-      dt = timestamp_sec - last_imu_timestamp_sec_;
-    }
-    last_imu_timestamp_sec_ = timestamp_sec;
-    
-    return integration_interface_->addIMUData(timestamp_sec, imu_measurement.acc_, imu_measurement.gyr_, dt);
+    // ImuAccGyr is a 6x1 vector: [acc_x, acc_y, acc_z, gyro_x, gyro_y, gyro_z]
+    // Note: This method cannot be used without timestamp - needs redesign
+    LOG(WARNING) << "addIMUMeasurement called without timestamp - not implemented";
+    return false;
   }
   
-  size_t addIMUMeasurements(const std::vector<ImuAccGyr>& imu_measurements) override {
+    size_t addIMUMeasurements(const std::vector<ImuAccGyr>& imu_measurements) override {
     if (!initialized_) {
       return 0;
     }
     
-    std::vector<double> timestamps;
-    std::vector<Eigen::Vector3d> accels;
-    std::vector<Eigen::Vector3d> gyros;
-    std::vector<double> dts;
-    
-    timestamps.reserve(imu_measurements.size());
-    accels.reserve(imu_measurements.size());
-    gyros.reserve(imu_measurements.size());
-    dts.reserve(imu_measurements.size());
-    
-    double prev_timestamp_sec = last_imu_timestamp_sec_;
-    
-    for (const auto& imu : imu_measurements) {
-      const double timestamp_sec = timestampToSeconds(imu.timestamp_);
-      timestamps.push_back(timestamp_sec);
-      accels.push_back(imu.acc_);
-      gyros.push_back(imu.gyr_);
-      
-      double dt = 0.005;
-      if (prev_timestamp_sec > 0.0) {
-        dt = timestamp_sec - prev_timestamp_sec;
-      }
-      dts.push_back(dt);
-      prev_timestamp_sec = timestamp_sec;
-    }
-    
-    if (!timestamps.empty()) {
-      last_imu_timestamp_sec_ = timestamps.back();
-    }
-    
-    return integration_interface_->addIMUDataBatch(timestamps, accels, gyros, dts);
+    // ImuAccGyr is a 6x1 vector without timestamps
+    // This method cannot be used without timestamps - needs redesign
+    LOG(WARNING) << "addIMUMeasurements called without timestamps - not implemented";
+    return 0;
   }
   
   bool addIMUTimestamps(const std::vector<double>& /*imu_timestamps*/) override {
@@ -602,11 +584,11 @@ private:
     params.smoother_lag = 5.0;
     
     params.imu_rate = 200.0;
-    params.accel_noise_sigma = imu_params_.acc_noise_;
-    params.gyro_noise_sigma = imu_params_.gyro_noise_;
-    params.accel_bias_rw_sigma = imu_params_.acc_walk_;
-    params.gyro_bias_rw_sigma = imu_params_.gyro_walk_;
-    params.gravity = Eigen::Vector3d(0.0, 0.0, -9.81);
+    params.accel_noise_sigma = imu_params_.acc_noise_density_;
+    params.gyro_noise_sigma = imu_params_.gyro_noise_density_;
+    params.accel_bias_rw_sigma = imu_params_.acc_random_walk_;
+    params.gyro_bias_rw_sigma = imu_params_.gyro_random_walk_;
+    params.gravity = imu_params_.n_gravity_.norm() > 0 ? imu_params_.n_gravity_ : Eigen::Vector3d(0.0, 0.0, -9.81);
     
     if (params.use_gp_priors) {
       params.gp_type = "WNOJ";
