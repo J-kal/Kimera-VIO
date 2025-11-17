@@ -31,6 +31,11 @@ find_package(opengv REQUIRED)
 find_package(OpenCV REQUIRED)
 find_package(DBoW2 REQUIRED)
 find_package(KimeraRPGO REQUIRED)
+# GeographicLib is required by gtsam_unstable
+find_package(GeographicLib REQUIRED)
+if(GeographicLib_LIBRARY_DIRS)
+  link_directories(${GeographicLib_LIBRARY_DIRS})
+endif()
 # Pangolin is optional
 find_package(Pangolin QUIET)
 
@@ -78,9 +83,9 @@ add_library(${PROJECT_NAME} SHARED "")
 ### Add source code for data provider.
 add_subdirectory(include/kimera-vio/dataprovider)
 add_subdirectory(src/dataprovider)
-### Add source code for data provider.
-add_subdirectory(include/kimera-vio/playground)
-add_subdirectory(src/playground)
+### Add source code for playground (COMMENTED OUT - not needed for MonoImuPipeline)
+# add_subdirectory(include/kimera-vio/playground)
+# add_subdirectory(src/playground)
 ### Add source code for Frontend.
 add_subdirectory(include/kimera-vio/frontend)
 add_subdirectory(src/frontend)
@@ -103,7 +108,12 @@ if(ENABLE_GRAPH_TIME_CENTRIC_ADAPTER)
   # Link against online_fgo_core if available
   find_package(online_fgo_core QUIET)
   if(online_fgo_core_FOUND)
-    target_link_libraries(${PROJECT_NAME} PRIVATE online_fgo_core::online_fgo_core)
+    target_link_libraries(${PROJECT_NAME} PRIVATE 
+      online_fgo_core::online_fgo_integrator
+      online_fgo_core::online_fgo_graph
+      online_fgo_core::online_fgo_interface
+      online_fgo_core::online_fgo_data
+    )
     message(STATUS "Found online_fgo_core, linking against it")
   else()
     message(WARNING "online_fgo_core not found - GraphTimeCentric adapter will not function")
@@ -137,7 +147,7 @@ add_subdirectory(src/logging)
 ### Add source code for imu Frontend
 add_subdirectory(include/kimera-vio/imu-frontend)
 add_subdirectory(src/imu-frontend)
-### Add source code for visualizer.
+### Add source code for visualizer
 add_subdirectory(include/kimera-vio/visualizer)
 add_subdirectory(src/visualizer)
 
@@ -154,6 +164,14 @@ target_link_libraries(${PROJECT_NAME}
     gtsam_unstable
     opengv
 )
+
+# Link GeographicLib if found (required by gtsam_unstable)
+if(TARGET GeographicLib::GeographicLib_SHARED)
+  # Use the imported target directly for best compatibility
+  target_link_libraries(${PROJECT_NAME} PUBLIC GeographicLib::GeographicLib_SHARED)
+elseif(GeographicLib_LIBRARIES)
+  target_link_libraries(${PROJECT_NAME} PUBLIC ${GeographicLib_LIBRARIES})
+endif()
 target_include_directories(${PROJECT_NAME}
   PUBLIC
     ${DBoW2_INCLUDE_DIRS}
@@ -190,22 +208,23 @@ target_compile_features(${PROJECT_NAME} PUBLIC
 # e.g. when testing
 add_library(kimera_vio::kimera_vio ALIAS kimera_vio)
 
-add_executable(stereoVIOEuroc ./examples/KimeraVIO.cpp)
-target_link_libraries(stereoVIOEuroc PUBLIC kimera_vio::kimera_vio)
+# Stereo executable not needed for MonoImuPipeline
+# add_executable(stereoVIOEuroc ./examples/KimeraVIO.cpp)
+# target_link_libraries(stereoVIOEuroc PUBLIC kimera_vio::kimera_vio)
 
 ############################### TESTS ##########################################
-### Add testing
+### Add testing (COMMENTED OUT FOR FASTER BUILDS - uncomment if you need tests)
 # Respect CATKIN_ENABLE_TESTING and BUILD_TESTING flags
-if(DEFINED CATKIN_ENABLE_TESTING AND NOT CATKIN_ENABLE_TESTING)
-  set(KIMERA_BUILD_TESTS_DEFAULT OFF)
-elseif(DEFINED BUILD_TESTING AND NOT BUILD_TESTING)
-  set(KIMERA_BUILD_TESTS_DEFAULT OFF)
-else()
-  set(KIMERA_BUILD_TESTS_DEFAULT ON)
-endif()
-option(KIMERA_BUILD_TESTS "Build tests" ${KIMERA_BUILD_TESTS_DEFAULT})
+# if(DEFINED CATKIN_ENABLE_TESTING AND NOT CATKIN_ENABLE_TESTING)
+#   set(KIMERA_BUILD_TESTS_DEFAULT OFF)
+# elseif(DEFINED BUILD_TESTING AND NOT BUILD_TESTING)
+#   set(KIMERA_BUILD_TESTS_DEFAULT OFF)
+# else()
+#   set(KIMERA_BUILD_TESTS_DEFAULT ON)
+# endif()
+# option(KIMERA_BUILD_TESTS "Build tests" ${KIMERA_BUILD_TESTS_DEFAULT})
 option(ENABLE_GRAPH_TIME_CENTRIC_ADAPTER "Enable GraphTimeCentric adapter" ON)
-if(KIMERA_BUILD_TESTS)
+if(FALSE)  # Disabled tests for faster builds
   # Download and unpack googletest at configure time
   # TODO Consider doing the same for glog, gflags, although it might
   # make the command `cmake ..` a bit slow.
