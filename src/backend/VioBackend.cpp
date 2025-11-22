@@ -541,6 +541,44 @@ bool VioBackend::addVisualInertialStateAndOptimize(const BackendInput& input) {
   timestamp_lkf_ = input.timestamp_;
   return is_smoother_ok;
 }
+
+// TODO(Toni): no need to pass landmarks_kf, can iterate directly over feature
+// tracks..
+// Uses landmark table to add factors in graph.
+void VioBackend::addLandmarksToGraph(const LandmarkIds& landmarks_kf) {
+  // Add selected landmarks to graph:
+  int n_new_landmarks = 0;
+  int n_updated_landmarks = 0;
+  debug_info_.numAddedSmartF_ += landmarks_kf.size();
+
+  for (const LandmarkId& lmk_id : landmarks_kf) {
+    FeatureTrack& ft = feature_tracks_.at(lmk_id);
+    // TODO(TONI): parametrize this min_num_of_obs... should be in Frontend
+    // rather than Backend though...
+    if (ft.obs_.size() < 2) {  // we only insert feature tracks of length at
+                               // least 2 (otherwise uninformative)
+      continue;
+    }
+
+    if (!ft.in_ba_graph_) {
+      ft.in_ba_graph_ = true;
+      addLandmarkToGraph(lmk_id, ft);
+      ++n_new_landmarks;
+    } else {
+      const std::pair<FrameId, StereoPoint2> obs_kf = ft.obs_.back();
+
+      LOG_IF(FATAL, obs_kf.first != static_cast<FrameId>(curr_kf_id_))
+          << "addLandmarksToGraph: last obs is not from the current "
+             "keyframe!\n";
+
+      updateLandmarkInGraph(lmk_id, obs_kf);
+      ++n_updated_landmarks;
+    }
+  }
+
+  VLOG(10) << "Added " << n_new_landmarks << " new landmarks\n"
+           << "Updated " << n_updated_landmarks << " landmarks in graph";
+}
 /* -------------------------------------------------------------------------- */
 // Adds a landmark to the graph for the first time.
 void VioBackend::addLandmarkToGraph(const LandmarkId& lmk_id,

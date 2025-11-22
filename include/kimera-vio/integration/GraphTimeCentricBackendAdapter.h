@@ -375,14 +375,39 @@ public:
    */
   Timestamp secondsToTimestamp(double seconds) const;
 
-  // ========================================================================
-  // PIMPL PATTERN - Hide implementation details
-  // ========================================================================
-  
-  class Impl;  // Forward declaration of implementation class (public for inheritance in .cpp)
-
 private:
-  std::unique_ptr<Impl> pimpl_;  // Pointer to implementation
+  // Parameters
+  BackendParams backend_params_;
+  ImuParams imu_params_;
+  
+  // Integration interface to online_fgo_core (forward declared)
+  std::unique_ptr<fgo::integration::KimeraIntegrationInterface> integration_interface_;
+  std::unique_ptr<fgo::core::ApplicationInterface> standalone_app_;
+  
+  // State
+  bool initialized_;
+  size_t num_states_;
+  double last_optimization_time_;
+  double last_imu_timestamp_sec_;
+  std::vector<double> state_timestamps_;
+  
+  // Buffering
+  struct BufferedState {
+    Timestamp timestamp;
+    gtsam::Pose3 pose;
+    gtsam::Vector3 velocity;
+    gtsam::imuBias::ConstantBias bias;
+    
+    bool operator<(const BufferedState& other) const {
+      return timestamp < other.timestamp;
+    }
+  };
+  std::vector<BufferedState> non_keyframe_buffer_;
+  mutable std::mutex state_buffer_mutex_;
+  
+  // Helper methods
+  fgo::integration::KimeraIntegrationParams createIntegrationParams() const;
+  std::optional<fgo::integration::StateHandle> findStateHandleNearTimestamp(double timestamp) const;
 };
 
 } // namespace VIO

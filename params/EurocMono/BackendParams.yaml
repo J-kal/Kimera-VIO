@@ -3,7 +3,7 @@
 # Backend modality for regular VIO
 # 0: Structureless factors only, 4: SPR pipeline
 backend_modality: 0
-smootherType: 2
+
 
 #INITIALIZATION PARAMETERS
 autoInitialize: 1
@@ -104,3 +104,11 @@ kimera:
 # Includes: factor keys, .g2o files, .dot graph visualizations
 # Output is logged to Rerun and saved to debug_run_logs/
 enable_factor_graph_debug_logging: 1
+
+# smootherType - select which backend smoother to use:
+# 0: ISAM2 (incremental nonlinear smoother, default)
+# 1: Levenberg-Marquardt (batch nonlinear optimizer)
+# 2: Gauss-Newton (batch nonlinear optimizer)
+# 3: Dogleg (batch nonlinear optimizer)
+# NOTE: Not all options may be supported in every build.
+smootherType: 2

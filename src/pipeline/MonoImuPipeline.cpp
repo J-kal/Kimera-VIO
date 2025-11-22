@@ -108,7 +108,7 @@ MonoImuPipeline::MonoImuPipeline(const VioParams& params,
         }
         
         // Only push keyframes
-        backend_input_queue.push(std::make_unique<BackendInput>(
+        backend_input_queue_.push(std::make_unique<BackendInput>(
             converted_output->timestamp_,
             converted_output->status_mono_measurements_,
             converted_output->pim_,
