@@ -1,10 +1,9 @@
 %YAML:1.0
 
-# only works with VioBackend & requires online_fgo_core
-use_graph_time_centric:1
 # Backend modality for regular VIO
 # 0: Structureless factors only, 4: SPR pipeline
 backend_modality: 0
+smootherType: 2
 
 #INITIALIZATION PARAMETERS
 autoInitialize: 1
@@ -94,3 +93,14 @@ useDogLeg: 0
 #   EXTERNAL_ODOM = 4
 pose_guess_source: 0
 mono_translation_scale_factor: 0.1
+
+# GRAPH TIME CENTRIC ADAPTER ################################################
+use_graph_time_centric: 1
+kimera:
+  add_gp_motion_priors: 0
+
+# FACTOR GRAPH DEBUG LOGGING #################################################
+# Enable comprehensive factor graph logging when optimization fails
+# Includes: factor keys, .g2o files, .dot graph visualizations
+# Output is logged to Rerun and saved to debug_run_logs/
+enable_factor_graph_debug_logging: 1

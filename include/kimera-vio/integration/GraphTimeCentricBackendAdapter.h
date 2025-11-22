@@ -200,6 +200,16 @@ public:
   size_t addIMUMeasurements(const std::vector<ImuAccGyr>& imu_measurements);
 
   /**
+   * @brief Add multiple IMU measurements in batch from separate timestamp and
+   * measurement matrices.
+   * @param timestamps Matrix of timestamps
+   * @param measurements Matrix of accelerometer and gyroscope measurements
+   * @return true if successfully added
+   */
+  bool addIMUMeasurements(const ImuStampS& timestamps,
+                          const ImuAccGyrS& measurements);
+
+  /**
    * @brief Add IMU timestamps (legacy interface)
    * @param imu_timestamps Vector of timestamps in seconds
    * @return true if successfully added

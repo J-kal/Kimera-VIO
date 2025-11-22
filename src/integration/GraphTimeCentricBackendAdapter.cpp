@@ -71,6 +71,7 @@ class GraphTimeCentricBackendAdapter::Impl {
   // IMU handling
   virtual bool addIMUMeasurement(const ImuAccGyr& imu_measurement) = 0;
   virtual size_t addIMUMeasurements(const std::vector<ImuAccGyr>& imu_measurements) = 0;
+  virtual bool addIMUMeasurements(const ImuStampS& timestamps, const ImuAccGyrS& measurements) = 0;
   virtual bool addIMUTimestamps(const std::vector<double>& imu_timestamps) = 0;
   virtual bool preintegrateIMUBetweenStates(Timestamp t_i, Timestamp t_j) = 0;
   
@@ -102,6 +103,8 @@ class GraphTimeCentricBackendAdapter::Impl {
 #include "online_fgo_core/interface/ParameterInterface.h"
 #include "online_fgo_core/data/DataTypesFGO.h"
 
+#include <map>
+
 namespace {
   // Standalone application implementation for testing
   class StandaloneLogger : public fgo::core::LoggerInterface {
@@ -114,22 +117,31 @@ namespace {
   
   class StandaloneParameters : public fgo::core::ParameterInterface {
   public:
-    bool hasParameter(const std::string& name) const override { return false; }
+    bool hasParameter(const std::string& name) const override { return string_params_.count(name) > 0; }
     bool getBool(const std::string& name, bool default_value) override { return default_value; }
     int getInt(const std::string& name, int default_value) override { return default_value; }
     double getDouble(const std::string& name, double default_value) override { return default_value; }
-    std::string getString(const std::string& name, const std::string& default_value) override { return default_value; }
+    std::string getString(const std::string& name, const std::string& default_value) override {
+      if (string_params_.count(name)) {
+        return string_params_.at(name);
+      }
+      return default_value;
+    }
     std::vector<double> getDoubleArray(const std::string& name, const std::vector<double>& default_value) override { return default_value; }
     std::vector<int> getIntArray(const std::string& name, const std::vector<int>& default_value) override { return default_value; }
     std::vector<std::string> getStringArray(const std::string& name, const std::vector<std::string>& default_value) override { return default_value; }
     void setBool(const std::string& name, bool value) override {}
     void setInt(const std::string& name, int value) override {}
     void setDouble(const std::string& name, double value) override {}
-    void setString(const std::string& name, const std::string& value) override {}
+    void setString(const std::string& name, const std::string& value) override {
+      string_params_[name] = value;
+    }
     void setDoubleArray(const std::string& name, const std::vector<double>& value) override {}
     void setIntArray(const std::string& name, const std::vector<int>& value) override {}
     void setStringArray(const std::string& name, const std::vector<std::string>& value) override {}
     void loadFromYAML(const std::string& filename) override {}
+  private:
+    std::map<std::string, std::string> string_params_;
   };
   
   class StandaloneApp : public fgo::core::ApplicationInterface {
@@ -189,6 +201,25 @@ public:
       // Create standalone application for testing
       standalone_app_ = std::make_unique<StandaloneApp>();
       
+      std::string smootherTypeString;
+      switch (backend_params_.smootherType_) {
+        case 0:
+          smootherTypeString = "ISAM2";
+          break;
+        case 1:
+          smootherTypeString = "Batch";
+          break;
+        case 2:
+          smootherTypeString = "IncrementalFixedLag";
+          break;
+        case 3:
+          smootherTypeString = "BatchFixedLag";
+          break;
+        default:
+          LOG(FATAL) << "Unknown smoother type: " << backend_params_.smootherType_;
+      }
+      standalone_app_->getParameters().setString("GNSSFGO.Optimizer.smootherType", smootherTypeString);
+
       // Create integration interface
       integration_interface_ = std::make_unique<fgo::integration::KimeraIntegrationInterface>(*standalone_app_);
       
@@ -253,7 +284,7 @@ public:
     
     const double keyframe_timestamp_sec = timestampToSeconds(timestamp);
     
-    LOG(INFO) << "GraphTimeCentricBackendAdapter: adding keyframe at t=" 
+    LOG(INFO) << "GraphTimeCentricBackendAdapter: adding keyframe at t="
               << std::fixed << std::setprecision(6) << keyframe_timestamp_sec;
     
     try {
@@ -297,11 +328,14 @@ public:
       auto result = integration_interface_->optimize();
       
       if (result.success) {
-        last_optimization_time_ = state_timestamps_.back();
-        
-        LOG(INFO) << "GraphTimeCentricBackendAdapter: optimization succeeded"
-                  << " - optimized " << result.num_states << " states"
-                  << ", time: " << result.optimization_time_ms << " ms";
+        if (result.num_states > 0) {
+            last_optimization_time_ = state_timestamps_.back();
+            LOG(INFO) << "GraphTimeCentricBackendAdapter: optimization succeeded"
+                      << " - optimized " << result.num_states << " states"
+                      << ", time: " << result.optimization_time_ms << " ms";
+        } else {
+            LOG(WARNING) << "GraphTimeCentricBackendAdapter: optimization skipped, no states were optimized.";
+        }
         return true;
       } else {
         LOG(ERROR) << "GraphTimeCentricBackendAdapter: optimization failed: " << result.error_message;
@@ -478,6 +512,46 @@ public:
     // This method cannot be used without timestamps - needs redesign
     LOG(WARNING) << "addIMUMeasurements called without timestamps - not implemented";
     return 0;
+  }
+
+  bool addIMUMeasurements(const ImuStampS& timestamps,
+                        const ImuAccGyrS& measurements) override {
+    if (!initialized_) {
+      return false;
+    }
+
+    if (timestamps.cols() != measurements.cols()) {
+      LOG(ERROR) << "Inconsistent IMU data size";
+      return false;
+    }
+
+    std::vector<double> timestamps_sec;
+    std::vector<Eigen::Vector3d> accels;
+    std::vector<Eigen::Vector3d> gyros;
+    std::vector<double> dts;
+
+    timestamps_sec.reserve(timestamps.cols());
+    accels.reserve(timestamps.cols());
+    gyros.reserve(timestamps.cols());
+    dts.reserve(timestamps.cols());
+
+    for (int i = 0; i < timestamps.cols(); ++i) {
+      timestamps_sec.push_back(static_cast<double>(timestamps(0, i)) / 1e9);
+      accels.emplace_back(measurements.col(i).head<3>());
+      gyros.emplace_back(measurements.col(i).tail<3>());
+      if (i > 0) {
+        dts.push_back(static_cast<double>(timestamps(0, i) - timestamps(0, i - 1)) / 1e9);
+      } else {
+        dts.push_back(0.0);
+      }
+    }
+    if (!dts.empty() && dts.size() > 1) {
+      dts[0] = dts[1];
+    }
+    
+    integration_interface_->addIMUDataBatch(timestamps_sec, accels, gyros, dts);
+    
+    return true;
   }
   
   bool addIMUTimestamps(const std::vector<double>& /*imu_timestamps*/) override {
@@ -728,6 +802,11 @@ bool GraphTimeCentricBackendAdapter::addIMUMeasurement(const ImuAccGyr& imu_meas
 
 size_t GraphTimeCentricBackendAdapter::addIMUMeasurements(const std::vector<ImuAccGyr>& imu_measurements) {
   return pimpl_->addIMUMeasurements(imu_measurements);
+}
+
+bool GraphTimeCentricBackendAdapter::addIMUMeasurements(const ImuStampS& timestamps,
+                                                        const ImuAccGyrS& measurements) {
+  return pimpl_->addIMUMeasurements(timestamps, measurements);
 }
 
 bool GraphTimeCentricBackendAdapter::addIMUTimestamps(const std::vector<double>& imu_timestamps) {

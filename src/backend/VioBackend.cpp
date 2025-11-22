@@ -135,7 +135,11 @@ VioBackend::VioBackend(const gtsam::Pose3& B_Pose_leftCamRect,
   if (VLOG_IS_ON(1)) print();
 
   // Optional GraphTimeCentric adapter initialization (runtime toggle)
+  LOG(INFO) << "Backend parameter use_graph_time_centric: " 
+            << (backend_params_.use_graph_time_centric ? "true" : "false");
+  
   if (backend_params_.use_graph_time_centric) {
+    LOG(INFO) << "Initializing GraphTimeCentric adapter...";
     graph_time_centric_adapter_ =
         std::make_unique<GraphTimeCentricBackendAdapter>(
             backend_params_, imu_params_);
@@ -143,6 +147,8 @@ VioBackend::VioBackend(const gtsam::Pose3& B_Pose_leftCamRect,
       LOG(FATAL) << "Failed to initialize GraphTimeCentric adapter.";
     }
     LOG(INFO) << "GraphTimeCentric adapter initialized successfully";
+  } else {
+    LOG(INFO) << "GraphTimeCentric adapter disabled - using native Kimera backend";
   }
 }
 
@@ -479,8 +485,7 @@ bool VioBackend::addVisualInertialStateAndOptimize(const BackendInput& input) {
     // Process keyframe only (buffering disabled)
     CHECK(input.is_keyframe_) << "Non-keyframe should not reach backend with buffering disabled";
     
-    VLOG(1) << "Processing KEYFRAME at t=" 
-            << UtilsNumerical::NsecToSec(input.timestamp_);
+    
     
     // Add keyframe state directly (no buffer processing)
     graph_time_centric_adapter_->addKeyframeState(
@@ -508,10 +513,10 @@ bool VioBackend::addVisualInertialStateAndOptimize(const BackendInput& input) {
         
         VLOG(2) << "Updated backend state from GraphTimeCentric optimization";
       } else {
-        LOG(WARNING) << "Failed to retrieve optimized state from GraphTimeCentric";
+        LOG(ERROR) << "Failed to retrieve optimized state from GraphTimeCentric";
       }
     } else {
-      LOG(WARNING) << "GraphTimeCentric optimization failed";
+      LOG(ERROR) << "GraphTimeCentric optimization failed";
     }
     
     // Update bookkeeping
@@ -536,45 +541,6 @@ bool VioBackend::addVisualInertialStateAndOptimize(const BackendInput& input) {
   timestamp_lkf_ = input.timestamp_;
   return is_smoother_ok;
 }
-
-// TODO(Toni): no need to pass landmarks_kf, can iterate directly over feature
-// tracks..
-// Uses landmark table to add factors in graph.
-void VioBackend::addLandmarksToGraph(const LandmarkIds& landmarks_kf) {
-  // Add selected landmarks to graph:
-  int n_new_landmarks = 0;
-  int n_updated_landmarks = 0;
-  debug_info_.numAddedSmartF_ += landmarks_kf.size();
-
-  for (const LandmarkId& lmk_id : landmarks_kf) {
-    FeatureTrack& ft = feature_tracks_.at(lmk_id);
-    // TODO(TONI): parametrize this min_num_of_obs... should be in Frontend
-    // rather than Backend though...
-    if (ft.obs_.size() < 2) {  // we only insert feature tracks of length at
-                               // least 2 (otherwise uninformative)
-      continue;
-    }
-
-    if (!ft.in_ba_graph_) {
-      ft.in_ba_graph_ = true;
-      addLandmarkToGraph(lmk_id, ft);
-      ++n_new_landmarks;
-    } else {
-      const std::pair<FrameId, StereoPoint2> obs_kf = ft.obs_.back();
-
-      LOG_IF(FATAL, obs_kf.first != static_cast<FrameId>(curr_kf_id_))
-          << "addLandmarksToGraph: last obs is not from the current "
-             "keyframe!\n";
-
-      updateLandmarkInGraph(lmk_id, obs_kf);
-      ++n_updated_landmarks;
-    }
-  }
-
-  VLOG(10) << "Added " << n_new_landmarks << " new landmarks\n"
-           << "Updated " << n_updated_landmarks << " landmarks in graph";
-}
-
 /* -------------------------------------------------------------------------- */
 // Adds a landmark to the graph for the first time.
 void VioBackend::addLandmarkToGraph(const LandmarkId& lmk_id,
@@ -1506,6 +1472,17 @@ bool VioBackend::updateSmoother(Smoother::Result* result,
     LOG(ERROR) << "ERROR: Variable has type '" << symb.chr() << "' "
                << "and index " << symb.index() << std::endl;
 
+    // Log comprehensive factor graph debug info before attempting recovery
+    if (backend_params_.enable_factor_graph_debug_logging_) {
+      LOG(ERROR) << "Indeterminant linear system detected. Logging debug info...";
+      gtsam::NonlinearFactorGraph combined_graph = smoother_->getFactors();
+      combined_graph.push_back(new_factors.begin(), new_factors.end());
+      gtsam::Values combined_values = smoother_->calculateEstimate();
+      combined_values.insert(new_values);
+      logFactorGraphDebugInfo(combined_graph, combined_values, 
+                             "indeterminant_system_failure");
+    }
+
     if (VLOG_IS_ON(1)) {
       smoother_->getFactors().print("Smoother's factors:\n[\n\t");
       LOG(INFO) << " ]";
@@ -1592,26 +1569,74 @@ bool VioBackend::updateSmoother(Smoother::Result* result,
     }
   } catch (const gtsam::InvalidNoiseModel& e) {
     LOG(ERROR) << e.what();
+    if (backend_params_.enable_factor_graph_debug_logging_) {
+      gtsam::NonlinearFactorGraph combined_graph = smoother_->getFactors();
+      combined_graph.push_back(new_factors.begin(), new_factors.end());
+      gtsam::Values combined_values = smoother_->calculateEstimate();
+      combined_values.insert(new_values);
+      logFactorGraphDebugInfo(combined_graph, combined_values, 
+                             "invalid_noise_model_failure");
+    }
     printSmootherInfo(new_factors, delete_slots);
     return false;
   } catch (const gtsam::InvalidMatrixBlock& e) {
     LOG(ERROR) << e.what();
+    if (backend_params_.enable_factor_graph_debug_logging_) {
+      gtsam::NonlinearFactorGraph combined_graph = smoother_->getFactors();
+      combined_graph.push_back(new_factors.begin(), new_factors.end());
+      gtsam::Values combined_values = smoother_->calculateEstimate();
+      combined_values.insert(new_values);
+      logFactorGraphDebugInfo(combined_graph, combined_values, 
+                             "invalid_matrix_block_failure");
+    }
     printSmootherInfo(new_factors, delete_slots);
     return false;
   } catch (const gtsam::InvalidDenseElimination& e) {
     LOG(ERROR) << e.what();
+    if (backend_params_.enable_factor_graph_debug_logging_) {
+      gtsam::NonlinearFactorGraph combined_graph = smoother_->getFactors();
+      combined_graph.push_back(new_factors.begin(), new_factors.end());
+      gtsam::Values combined_values = smoother_->calculateEstimate();
+      combined_values.insert(new_values);
+      logFactorGraphDebugInfo(combined_graph, combined_values, 
+                             "invalid_dense_elimination_failure");
+    }
     printSmootherInfo(new_factors, delete_slots);
     return false;
   } catch (const gtsam::InvalidArgumentThreadsafe& e) {
     LOG(ERROR) << e.what();
+    if (backend_params_.enable_factor_graph_debug_logging_) {
+      gtsam::NonlinearFactorGraph combined_graph = smoother_->getFactors();
+      combined_graph.push_back(new_factors.begin(), new_factors.end());
+      gtsam::Values combined_values = smoother_->calculateEstimate();
+      combined_values.insert(new_values);
+      logFactorGraphDebugInfo(combined_graph, combined_values, 
+                             "invalid_argument_failure");
+    }
     printSmootherInfo(new_factors, delete_slots);
     return false;
   } catch (const gtsam::ValuesKeyDoesNotExist& e) {
     LOG(ERROR) << e.what();
+    if (backend_params_.enable_factor_graph_debug_logging_) {
+      gtsam::NonlinearFactorGraph combined_graph = smoother_->getFactors();
+      combined_graph.push_back(new_factors.begin(), new_factors.end());
+      gtsam::Values combined_values = smoother_->calculateEstimate();
+      combined_values.insert(new_values);
+      logFactorGraphDebugInfo(combined_graph, combined_values, 
+                             "values_key_does_not_exist_failure");
+    }
     printSmootherInfo(new_factors, delete_slots);
     return false;
   } catch (const gtsam::CholeskyFailed& e) {
     LOG(ERROR) << e.what();
+    if (backend_params_.enable_factor_graph_debug_logging_) {
+      gtsam::NonlinearFactorGraph combined_graph = smoother_->getFactors();
+      combined_graph.push_back(new_factors.begin(), new_factors.end());
+      gtsam::Values combined_values = smoother_->calculateEstimate();
+      combined_values.insert(new_values);
+      logFactorGraphDebugInfo(combined_graph, combined_values, 
+                             "cholesky_failed_failure");
+    }
     printSmootherInfo(new_factors, delete_slots);
     return false;
   } catch (const gtsam::CheiralityException& e) {
@@ -1621,6 +1646,15 @@ bool VioBackend::updateSmoother(Smoother::Result* result,
     LOG(ERROR) << "ERROR: Variable has type '" << lmk_symbol_cheirality.chr()
                << "' "
                << "and index " << lmk_symbol_cheirality.index();
+    if (backend_params_.enable_factor_graph_debug_logging_) {
+      gtsam::NonlinearFactorGraph combined_graph = smoother_->getFactors();
+      combined_graph.push_back(new_factors.begin(), new_factors.end());
+      gtsam::Values combined_values = smoother_->calculateEstimate();
+      combined_values.insert(new_values);
+      logFactorGraphDebugInfo(combined_graph, combined_values, 
+                             "cheirality_exception_lmk_" + 
+                             std::to_string(lmk_symbol_cheirality.index()));
+    }
     printSmootherInfo(new_factors, delete_slots);
     got_cheirality_exception = true;
   } catch (const gtsam::StereoCheiralityException& e) {
@@ -1630,29 +1664,78 @@ bool VioBackend::updateSmoother(Smoother::Result* result,
     LOG(ERROR) << "ERROR: Variable has type '" << lmk_symbol_cheirality.chr()
                << "' "
                << "and index " << lmk_symbol_cheirality.index();
+    if (backend_params_.enable_factor_graph_debug_logging_) {
+      gtsam::NonlinearFactorGraph combined_graph = smoother_->getFactors();
+      combined_graph.push_back(new_factors.begin(), new_factors.end());
+      gtsam::Values combined_values = smoother_->calculateEstimate();
+      combined_values.insert(new_values);
+      logFactorGraphDebugInfo(combined_graph, combined_values, 
+                             "stereo_cheirality_exception_lmk_" + 
+                             std::to_string(lmk_symbol_cheirality.index()));
+    }
     printSmootherInfo(new_factors, delete_slots);
     got_cheirality_exception = true;
   } catch (const gtsam::RuntimeErrorThreadsafe& e) {
     LOG(ERROR) << e.what();
+    if (backend_params_.enable_factor_graph_debug_logging_) {
+      gtsam::NonlinearFactorGraph combined_graph = smoother_->getFactors();
+      combined_graph.push_back(new_factors.begin(), new_factors.end());
+      gtsam::Values combined_values = smoother_->calculateEstimate();
+      combined_values.insert(new_values);
+      logFactorGraphDebugInfo(combined_graph, combined_values, 
+                             "runtime_error_failure");
+    }
     printSmootherInfo(new_factors, delete_slots);
     return false;
   } catch (const gtsam::OutOfRangeThreadsafe& e) {
     LOG(ERROR) << e.what();
+    if (backend_params_.enable_factor_graph_debug_logging_) {
+      gtsam::NonlinearFactorGraph combined_graph = smoother_->getFactors();
+      combined_graph.push_back(new_factors.begin(), new_factors.end());
+      gtsam::Values combined_values = smoother_->calculateEstimate();
+      combined_values.insert(new_values);
+      logFactorGraphDebugInfo(combined_graph, combined_values, 
+                             "out_of_range_failure");
+    }
     printSmootherInfo(new_factors, delete_slots);
     return false;
   } catch (const std::out_of_range& e) {
     LOG(ERROR) << e.what();
+    if (backend_params_.enable_factor_graph_debug_logging_) {
+      gtsam::NonlinearFactorGraph combined_graph = smoother_->getFactors();
+      combined_graph.push_back(new_factors.begin(), new_factors.end());
+      gtsam::Values combined_values = smoother_->calculateEstimate();
+      combined_values.insert(new_values);
+      logFactorGraphDebugInfo(combined_graph, combined_values, 
+                             "std_out_of_range_failure");
+    }
     printSmootherInfo(new_factors, delete_slots);
     return false;
   } catch (const std::exception& e) {
     // Catch anything thrown within try block that derives from
     // std::exception.
     LOG(ERROR) << e.what();
+    if (backend_params_.enable_factor_graph_debug_logging_) {
+      gtsam::NonlinearFactorGraph combined_graph = smoother_->getFactors();
+      combined_graph.push_back(new_factors.begin(), new_factors.end());
+      gtsam::Values combined_values = smoother_->calculateEstimate();
+      combined_values.insert(new_values);
+      logFactorGraphDebugInfo(combined_graph, combined_values, 
+                             "generic_exception_failure");
+    }
     printSmootherInfo(new_factors, delete_slots);
     return false;
   } catch (...) {
     // Catch the rest of exceptions.
     LOG(ERROR) << "Unrecognized exception.";
+    if (backend_params_.enable_factor_graph_debug_logging_) {
+      gtsam::NonlinearFactorGraph combined_graph = smoother_->getFactors();
+      combined_graph.push_back(new_factors.begin(), new_factors.end());
+      gtsam::Values combined_values = smoother_->calculateEstimate();
+      combined_values.insert(new_values);
+      logFactorGraphDebugInfo(combined_graph, combined_values, 
+                             "unrecognized_exception_failure");
+    }
     printSmootherInfo(new_factors, delete_slots);
     return false;
   }
@@ -2417,4 +2500,149 @@ bool VioBackend::deleteLmkFromFeatureTracks(const LandmarkId& lmk_id) {
   return false;
 }
 
+/* -------------------------------------------------------------------------- */
+// Debug utilities for factor graph logging
+/* -------------------------------------------------------------------------- */
+
+void VioBackend::printFactorKeys(const gtsam::NonlinearFactorGraph& graph,
+                                const std::string& label) const {
+  LOG(INFO) << "========== " << label << " ==========";
+  LOG(INFO) << "Total factors: " << graph.size();
+  
+  size_t slot = 0;
+  for (const auto& factor : graph) {
+    if (factor) {
+      std::stringstream ss;
+      ss << "  Factor[" << slot << "]: {";
+      bool first = true;
+      for (const auto& key : factor->keys()) {
+        if (!first) ss << ", ";
+        ss << gtsam::DefaultKeyFormatter(key);
+        first = false;
+      }
+      ss << "}";
+      LOG(INFO) << ss.str();
+    } else {
+      LOG(INFO) << "  Factor[" << slot << "]: nullptr";
+    }
+    slot++;
+  }
+  LOG(INFO) << "========== End " << label << " ==========";
+}
+
+bool VioBackend::saveFactorGraphAsG2o(const gtsam::NonlinearFactorGraph& graph,
+                                     const gtsam::Values& values,
+                                     const std::string& filename) const {
+  try {
+    // Construct full path in debug_run_logs directory
+    std::string full_path = "/workspaces/src/debug_run_logs/" + filename + ".g2o";
+    
+    // Use GTSAM's built-in writeG2o function
+    gtsam::writeG2o(graph, values, full_path);
+    
+    LOG(INFO) << "Successfully saved factor graph to: " << full_path;
+    return true;
+  } catch (const std::exception& e) {
+    LOG(ERROR) << "Failed to save factor graph as .g2o: " << e.what();
+    return false;
+  }
+}
+
+bool VioBackend::saveFactorGraphAsDot(const gtsam::NonlinearFactorGraph& graph,
+                                     const gtsam::Values& values,
+                                     const std::string& filename) const {
+  try {
+    // Construct full path in debug_run_logs directory
+    std::string full_path = "/workspaces/src/debug_run_logs/" + filename + ".dot";
+    
+    std::ofstream dot_file(full_path);
+    if (!dot_file.is_open()) {
+      LOG(ERROR) << "Failed to open file: " << full_path;
+      return false;
+    }
+    
+    // Write DOT format header
+    dot_file << "digraph FactorGraph {" << std::endl;
+    dot_file << "  rankdir=LR;" << std::endl;
+    dot_file << "  node [shape=circle];" << std::endl;
+    
+    // Write variable nodes (from values)
+    dot_file << "  // Variable nodes" << std::endl;
+    for (const auto& key_value : values) {
+      gtsam::Symbol symbol(key_value.key);
+      dot_file << "  \"" << gtsam::DefaultKeyFormatter(key_value.key) 
+               << "\" [style=filled, fillcolor=lightblue];" << std::endl;
+    }
+    
+    // Write factor nodes and edges
+    dot_file << "  // Factor nodes and edges" << std::endl;
+    size_t slot = 0;
+    for (const auto& factor : graph) {
+      if (factor && !factor->keys().empty()) {
+        std::string factor_name = "f" + std::to_string(slot);
+        dot_file << "  \"" << factor_name 
+                 << "\" [shape=box, style=filled, fillcolor=lightcoral];" << std::endl;
+        
+        // Connect factor to its variables
+        for (const auto& key : factor->keys()) {
+          dot_file << "  \"" << factor_name << "\" -> \""
+                   << gtsam::DefaultKeyFormatter(key) << "\";" << std::endl;
+        }
+      }
+      slot++;
+    }
+    
+    dot_file << "}" << std::endl;
+    dot_file.close();
+    
+    LOG(INFO) << "Successfully saved factor graph to: " << full_path;
+    LOG(INFO) << "View with: dot -Tpng " << full_path << " -o " 
+              << filename << ".png";
+    return true;
+  } catch (const std::exception& e) {
+    LOG(ERROR) << "Failed to save factor graph as .dot: " << e.what();
+    return false;
+  }
+}
+
+void VioBackend::logFactorGraphDebugInfo(const gtsam::NonlinearFactorGraph& graph,
+                                        const gtsam::Values& values,
+                                        const std::string& context_label) const {
+  if (!backend_params_.enable_factor_graph_debug_logging_) {
+    return;  // Debug logging disabled
+  }
+  
+  LOG(WARNING) << "========================================";
+  LOG(WARNING) << "FACTOR GRAPH DEBUG INFO: " << context_label;
+  LOG(WARNING) << "========================================";
+  
+  // Generate timestamp-based filename
+  auto now = std::chrono::system_clock::now();
+  auto timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(
+      now.time_since_epoch()).count();
+  std::string base_filename = context_label + "_" + std::to_string(timestamp);
+  
+  // 1. Print factor keys to log
+  printFactorKeys(graph, "Factor Keys for " + context_label);
+  
+  // 2. Save to .g2o format
+  if (saveFactorGraphAsG2o(graph, values, base_filename)) {
+    LOG(INFO) << "Saved .g2o file for offline analysis";
+  }
+  
+  // 3. Save to .dot format
+  if (saveFactorGraphAsDot(graph, values, base_filename)) {
+    LOG(INFO) << "Saved .dot file for GraphViz visualization";
+  }
+  
+  // 4. Print summary statistics
+  LOG(INFO) << "Graph statistics:";
+  LOG(INFO) << "  - Total factors: " << graph.size();
+  LOG(INFO) << "  - Total values: " << values.size();
+  LOG(INFO) << "  - Graph error: " << graph.error(values);
+  
+  LOG(WARNING) << "========================================";
+}
+
 }  // namespace VIO.
+

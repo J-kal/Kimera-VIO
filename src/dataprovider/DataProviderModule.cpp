@@ -140,6 +140,7 @@ DataProviderModule::getTimeSyncedImuMeasurements(const Timestamp& timestamp,
           imu_timestamp_curr_frame,
           &imu_meas->timestamps_,
           &imu_meas->acc_gyr_);
+
   logQueryResult(timestamp, query_result);
 
   switch (query_result) {

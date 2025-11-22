@@ -28,6 +28,7 @@ VioBackendModule::VioBackendModule(InputQueue* input_queue,
 VioBackendModule::OutputUniquePtr VioBackendModule::spinOnce(
     BackendInput::UniquePtr input) {
   CHECK(input);
+  LOG(INFO) << "Backend processing frame with timestamp: " << input->timestamp_;
   CHECK(vio_backend_);
   OutputUniquePtr output = vio_backend_->spinOnce(*input);
   if (!output) {

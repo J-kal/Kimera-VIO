@@ -431,6 +431,26 @@ class VioBackend {
 
   // Reset state of debug info.
   void resetDebugInfo(DebugVioInfo* debug_info);
+  
+  //! Debug utilities for factor graph logging
+  // Print only the keys of factors in the graph (easier to read than full graph)
+  void printFactorKeys(const gtsam::NonlinearFactorGraph& graph,
+                      const std::string& label = "Factor Graph Keys") const;
+  
+  // Save factor graph to .g2o format (standard factor graph file format)
+  bool saveFactorGraphAsG2o(const gtsam::NonlinearFactorGraph& graph,
+                           const gtsam::Values& values,
+                           const std::string& filename) const;
+  
+  // Save factor graph to .dot format (GraphViz visualization format)
+  bool saveFactorGraphAsDot(const gtsam::NonlinearFactorGraph& graph,
+                           const gtsam::Values& values,
+                           const std::string& filename) const;
+  
+  // Comprehensive debug logging when optimization fails (uses all above methods)
+  void logFactorGraphDebugInfo(const gtsam::NonlinearFactorGraph& graph,
+                              const gtsam::Values& values,
+                              const std::string& context_label = "optimization_failure") const;
 
  public:
   /// Getters

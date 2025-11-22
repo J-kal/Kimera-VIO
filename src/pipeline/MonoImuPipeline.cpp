@@ -85,9 +85,9 @@ MonoImuPipeline::MonoImuPipeline(const VioParams& params,
         data_provider_module_->setImuTimeShift(imu_time_shift_s);
       });
 
-  auto& backend_input_queue = backend_input_queue_;
-  vio_frontend_module_->registerOutputCallback(
-      [&backend_input_queue](const FrontendOutputPacketBase::Ptr& output) {
+  
+    vio_frontend_module_->registerOutputCallback(
+    [this](const FrontendOutputPacketBase::Ptr& output) {
         auto converted_output =
             std::dynamic_pointer_cast<MonoFrontendOutput>(output);
         CHECK(converted_output);

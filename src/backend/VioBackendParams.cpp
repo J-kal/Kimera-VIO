@@ -14,6 +14,7 @@
 
 #include "kimera-vio/backend/VioBackendParams.h"
 
+#include <set>
 #include <utility>
 
 namespace VIO {
@@ -171,6 +172,8 @@ bool BackendParams::parseYAMLVioBackendParams(const YamlParser& yaml_parser) {
 
   // GraphTimeCentric adapter toggle
   yaml_parser.getYamlParam("use_graph_time_centric", &use_graph_time_centric);
+  yaml_parser.getYamlParam("smootherType", &smootherType_);
+  yaml_parser.getYamlParam("enable_factor_graph_debug_logging", &enable_factor_graph_debug_logging_);
 
   return true;
 }
@@ -215,7 +218,10 @@ bool BackendParams::equalsVioBackendParams(const BackendParams& vp2,
       (useDogLeg_ == vp2.useDogLeg_) &&
       (pose_guess_source_ == vp2.pose_guess_source_) &&
       (fabs(mono_translation_scale_factor_ ==
-            vp2.mono_translation_scale_factor_));
+            vp2.mono_translation_scale_factor_)) &&
+      (use_graph_time_centric == vp2.use_graph_time_centric) &&
+      (smootherType_ == vp2.smootherType_) &&
+      (enable_factor_graph_debug_logging_ == vp2.enable_factor_graph_debug_logging_);
 }
 
 void BackendParams::printVioBackendParams() const {
@@ -288,7 +294,13 @@ void BackendParams::printVioBackendParams() const {
       "Pose Guess Source",
       VIO::to_underlying(pose_guess_source_),
       "Mono Translation Scale Factor",
-      mono_translation_scale_factor_);
+      mono_translation_scale_factor_,
+      "Use Graph Time Centric",
+      use_graph_time_centric,
+      "Smoother Type",
+      smootherType_,
+      "Enable Factor Graph Debug Logging",
+      enable_factor_graph_debug_logging_);
   LOG(INFO) << out.str();
   LOG(INFO) << "** Backend Iinitialization Parameters **\n"
             << "initial_ground_truth_state_: ";

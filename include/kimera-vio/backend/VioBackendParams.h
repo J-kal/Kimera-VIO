@@ -152,7 +152,13 @@ class BackendParams : public PipelineParams {
   PoseGuessSource pose_guess_source_ = PoseGuessSource::IMU;
   double mono_translation_scale_factor_ = 0.1;
   // Runtime toggle to use Graph Time Centric backend adapter
-  bool use_graph_time_centric = false;
+  bool use_graph_time_centric = true;
+  
+  //! Debug params
+  // Enable comprehensive factor graph logging when optimization fails
+  // Outputs factor keys, .g2o files, and .dot graph visualizations
+  bool enable_factor_graph_debug_logging_ = true;
+  int smootherType_ = 2;  // 0: ISAM2, 1: FixedLagSmoother, 2: Hybrid
 };
 
 }  // namespace VIO
