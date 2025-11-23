@@ -132,44 +132,29 @@ public:
       const gtsam::imuBias::ConstantBias& bias);
 
   /**
-   * @brief Add a keyframe state at specified timestamp
+   * @brief Add a keyframe state at specified timestamp with preintegrated IMU
    * 
    * Called by VioBackend when a new keyframe is created. This creates
-   * a state in GraphTimeCentric at the keyframe timestamp.
-   * ALSO processes any buffered non-keyframe states in chronological order.
+   * a state in GraphTimeCentric at the keyframe timestamp and stores
+   * the preintegrated IMU measurements (pim_) for later factor creation.
    * 
    * @param timestamp Keyframe timestamp (Kimera Timestamp type)
    * @param pose Pose estimate for the keyframe
    * @param velocity Velocity estimate
    * @param bias IMU bias estimate
-   * @return true if state successfully created
+   * @param pim Preintegrated IMU measurements from last keyframe to this one
    * 
    * Implementation:
-   * 1. Process all buffered non-keyframes (sorted by timestamp)
-   * 2. Add the keyframe state
-   * 3. Clear the buffer
+   * 1. Create state at keyframe timestamp
+   * 2. Store PIM for later IMU factor creation
    */
   void addKeyframeState(
       const Timestamp& timestamp,
       const gtsam::Pose3& pose,
       const gtsam::Vector3& velocity,
-      const gtsam::imuBias::ConstantBias& bias);
+      const gtsam::imuBias::ConstantBias& bias,
+      const ImuFrontend::PimPtr& pim);
 
-  /**
-   * @brief Legacy interface - add a keyframe with Pose only
-   * @param timestamp Keyframe timestamp
-   * @param pose_estimate Initial pose estimate for the keyframe
-   * @return true if state successfully created
-   */
-  bool addKeyframeState(Timestamp timestamp, const gtsam::Pose3& pose_estimate);
-
-  /**
-   * @brief Legacy interface - add a keyframe with full NavState estimate
-   * @param timestamp Keyframe timestamp
-   * @param nav_state Initial NavState (pose + velocity)
-   * @return true if state successfully created
-   */
-  bool addKeyframeState(Timestamp timestamp, const gtsam::NavState& nav_state);
 
   /**
    * @brief Add state from frame_id and timestamp (legacy interface)
@@ -180,56 +165,6 @@ public:
    */
   bool addStateValues(unsigned long frame_id, double timestamp, const gtsam::NavState& navstate);
 
-  // ========================================================================
-  // IMU HANDLING
-  // ========================================================================
-
-  /**
-   * @brief Add single IMU measurement to be used for preintegration
-   * @param timestamp Timestamp of the measurement
-   * @param linear_acceleration Raw accelerometer measurement
-   * @param angular_velocity Raw gyroscope measurement
-   */
-  bool addIMUMeasurement(const ImuAccGyr& imu_measurement);
-
-  /**
-   * @brief Add multiple IMU measurements in batch
-   * @param imu_measurements Vector of IMU measurements
-   * @return Number of measurements successfully added
-   */
-  size_t addIMUMeasurements(const std::vector<ImuAccGyr>& imu_measurements);
-
-  /**
-   * @brief Add multiple IMU measurements in batch from separate timestamp and
-   * measurement matrices.
-   * @param timestamps Matrix of timestamps
-   * @param measurements Matrix of accelerometer and gyroscope measurements
-   * @return true if successfully added
-   */
-  bool addIMUMeasurements(const ImuStampS& timestamps,
-                          const ImuAccGyrS& measurements);
-
-  /**
-   * @brief Add IMU timestamps (legacy interface)
-   * @param imu_timestamps Vector of timestamps in seconds
-   * @return true if successfully added
-   */
-  bool addIMUTimestamps(const std::vector<double>& imu_timestamps);
-
-  /**
-   * @brief Preintegrate IMU measurements between two timestamps
-   * 
-   * This explicitly requests preintegration between two states.
-   * Used when states are not consecutive in time.
-   * 
-   * @param t_i Start timestamp
-   * @param t_j End timestamp
-   * @return true if preintegration successful
-   * 
-   * NOTE: Preintegration is handled automatically by GraphTimeCentric.
-   * This method is currently a no-op.
-   */
-  bool preintegrateIMUBetweenStates(Timestamp t_i, Timestamp t_j);
 
   // ========================================================================
   // OPTIMIZATION
@@ -390,6 +325,10 @@ private:
   double last_optimization_time_;
   double last_imu_timestamp_sec_;
   std::vector<double> state_timestamps_;
+  
+  // Store preintegrated IMU measurements for each keyframe
+  // PIM[i] is the preintegration from keyframe[i-1] to keyframe[i]
+  std::vector<ImuFrontend::PimPtr> keyframe_pims_;
   
   // Buffering
   struct BufferedState {

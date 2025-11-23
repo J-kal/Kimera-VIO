@@ -128,12 +128,17 @@ bool GraphTimeCentricBackendAdapter::initialize() {
     standalone_app_ = std::make_unique<StandaloneApp>();
     
     std::string smootherTypeString;
+    // Map internal enum to the string values expected by online_fgo_core::GraphBase
+    // GraphBase expects either "IncrementalFixedLag" (iSAM2-based) or
+    // "BatchFixedLag" (Levenberg-Marquardt batch fixed-lag).
     switch (backend_params_.smootherType_) {
       case 0:
-        smootherTypeString = "ISAM2";
+        // legacy "ISAM2" -> use the name online_fgo_core expects for iSAM2 fixed-lag
+        smootherTypeString = "IncrementalFixedLag";
         break;
       case 1:
-        smootherTypeString = "Batch";
+        // legacy "Batch" -> use the batch fixed-lag name
+        smootherTypeString = "BatchFixedLag";
         break;
       case 2:
         smootherTypeString = "IncrementalFixedLag";
@@ -204,7 +209,8 @@ void GraphTimeCentricBackendAdapter::addKeyframeState(
     const Timestamp& timestamp,
     const gtsam::Pose3& pose,
     const gtsam::Vector3& velocity,
-    const gtsam::imuBias::ConstantBias& bias) {
+    const gtsam::imuBias::ConstantBias& bias,
+    const ImuFrontend::PimPtr& pim) {
   if (!initialized_) {
     LOG(ERROR) << "GraphTimeCentricBackendAdapter: not initialized, cannot add keyframe";
     return;
@@ -216,12 +222,23 @@ void GraphTimeCentricBackendAdapter::addKeyframeState(
             << std::fixed << std::setprecision(6) << keyframe_timestamp_sec;
   
   try {
-    // Add the keyframe state directly
-    auto keyframe_state_handle = integration_interface_->createStateAtTimestamp(keyframe_timestamp_sec);
+    auto keyframe_state_handle = integration_interface_->createStateAtTimestamp(
+        keyframe_timestamp_sec, pose, velocity, bias);
     
     if (keyframe_state_handle.valid) {
       state_timestamps_.push_back(keyframe_timestamp_sec);
       num_states_++;
+      
+      // Store PIM for this keyframe (preintegration from previous to current keyframe)
+      if (pim) {
+        keyframe_pims_.push_back(pim);
+        LOG(INFO) << "GraphTimeCentricBackendAdapter: stored PIM for keyframe at t=" 
+                  << keyframe_timestamp_sec;
+      } else {
+        keyframe_pims_.push_back(nullptr);
+        LOG(WARNING) << "GraphTimeCentricBackendAdapter: no PIM provided for keyframe at t=" 
+                     << keyframe_timestamp_sec;
+      }
       
       LOG(INFO) << "GraphTimeCentricBackendAdapter: created keyframe state " 
                 << keyframe_state_handle.index 
@@ -252,6 +269,29 @@ bool GraphTimeCentricBackendAdapter::optimizeGraph() {
             << state_timestamps_.size() << " states";
   
   try {
+    // Forward stored PIM values to interface for IMU factor creation
+    // PIM[i] corresponds to preintegration from state[i-1] to state[i]
+    if (!keyframe_pims_.empty() && keyframe_pims_.size() == state_timestamps_.size()) {
+      std::vector<std::pair<double, std::shared_ptr<gtsam::PreintegrationType>>> pim_data;
+      
+      for (size_t i = 0; i < keyframe_pims_.size(); ++i) {
+        if (keyframe_pims_[i]) {
+          // Convert Kimera's PIM to GTSAM's PreintegrationType
+          // The PIM is already a PreintegrationType, we just need to store it
+          std::shared_ptr<gtsam::PreintegrationType> pim_shared = keyframe_pims_[i];
+          pim_data.push_back({state_timestamps_[i], pim_shared});
+        }
+      }
+      
+      if (!pim_data.empty()) {
+        integration_interface_->addPreintegratedIMUData(pim_data);
+        LOG(INFO) << "GraphTimeCentricBackendAdapter: forwarded " 
+                  << pim_data.size() << " PIM values for IMU factor creation";
+      }
+      keyframe_pims_.clear();
+      LOG(DEBUG) << "GraphTimeCentricBackendAdapter: Cleared keyframe PIM buffer after forwarding";
+    }
+    
     // Trigger optimization through the interface
     auto result = integration_interface_->optimize();
     
@@ -428,92 +468,12 @@ std::optional<gtsam::Matrix> GraphTimeCentricBackendAdapter::getLatestStateCovar
   return integration_interface_->getStateCovariance(state_handle.value());
 }
 
-bool GraphTimeCentricBackendAdapter::addIMUMeasurement(const ImuAccGyr& imu_measurement) {
-  // ImuAccGyr is a 6x1 vector: [acc_x, acc_y, acc_z, gyro_x, gyro_y, gyro_z]
-  // Note: This method cannot be used without timestamp - needs redesign
-  LOG(WARNING) << "addIMUMeasurement called without timestamp - not implemented";
-  return false;
-}
-
-size_t GraphTimeCentricBackendAdapter::addIMUMeasurements(const std::vector<ImuAccGyr>& imu_measurements) {
-  if (!initialized_) {
-    return 0;
-  }
-  
-  // ImuAccGyr is a 6x1 vector without timestamps
-  // This method cannot be used without timestamps - needs redesign
-  LOG(WARNING) << "addIMUMeasurements called without timestamps - not implemented";
-  return 0;
-}
-
-bool GraphTimeCentricBackendAdapter::addIMUMeasurements(const ImuStampS& timestamps,
-                                                        const ImuAccGyrS& measurements) {
-  if (!initialized_) {
-    return false;
-  }
-
-  if (timestamps.cols() != measurements.cols()) {
-    LOG(ERROR) << "Inconsistent IMU data size";
-    return false;
-  }
-
-  std::vector<double> timestamps_sec;
-  std::vector<Eigen::Vector3d> accels;
-  std::vector<Eigen::Vector3d> gyros;
-  std::vector<double> dts;
-
-  timestamps_sec.reserve(timestamps.cols());
-  accels.reserve(timestamps.cols());
-  gyros.reserve(timestamps.cols());
-  dts.reserve(timestamps.cols());
-
-  for (int i = 0; i < timestamps.cols(); ++i) {
-    timestamps_sec.push_back(static_cast<double>(timestamps(0, i)) / 1e9);
-    accels.emplace_back(measurements.col(i).head<3>());
-    gyros.emplace_back(measurements.col(i).tail<3>());
-    if (i > 0) {
-      dts.push_back(static_cast<double>(timestamps(0, i) - timestamps(0, i - 1)) / 1e9);
-    } else {
-      dts.push_back(0.0);
-    }
-  }
-  if (!dts.empty() && dts.size() > 1) {
-    dts[0] = dts[1];
-  }
-  
-  integration_interface_->addIMUDataBatch(timestamps_sec, accels, gyros, dts);
-  
-  return true;
-}
-
-bool GraphTimeCentricBackendAdapter::addIMUTimestamps(const std::vector<double>& /*imu_timestamps*/) {
-  LOG(WARNING) << "GraphTimeCentricBackendAdapter::addIMUTimestamps not implemented - use addIMUMeasurements instead";
-  return true;
-}
-
-bool GraphTimeCentricBackendAdapter::preintegrateIMUBetweenStates(Timestamp /*t_i*/, Timestamp /*t_j*/) {
-  LOG(INFO) << "GraphTimeCentricBackendAdapter::preintegrateIMUBetweenStates - "
-            << "preintegration is handled automatically during optimization";
-  return true;
-}
-
-bool GraphTimeCentricBackendAdapter::addKeyframeState(Timestamp timestamp, const gtsam::Pose3& pose_estimate) {
-  gtsam::Vector3 velocity = gtsam::Vector3::Zero();
-  gtsam::imuBias::ConstantBias bias;
-  addKeyframeState(timestamp, pose_estimate, velocity, bias);
-  return true;
-}
-
-bool GraphTimeCentricBackendAdapter::addKeyframeState(Timestamp timestamp, const gtsam::NavState& nav_state) {
-  gtsam::imuBias::ConstantBias bias;
-  addKeyframeState(timestamp, nav_state.pose(), nav_state.velocity(), bias);
-  return true;
-}
 
 bool GraphTimeCentricBackendAdapter::addStateValues(unsigned long /*frame_id*/, double timestamp, const gtsam::NavState& navstate) {
   Timestamp kimera_timestamp = static_cast<Timestamp>(timestamp * 1e9);
   gtsam::imuBias::ConstantBias bias;
-  addKeyframeState(kimera_timestamp, navstate.pose(), navstate.velocity(), bias);
+  ImuFrontend::PimPtr null_pim = nullptr;
+  addKeyframeState(kimera_timestamp, navstate.pose(), navstate.velocity(), bias, null_pim);
   return true;
 }
 
