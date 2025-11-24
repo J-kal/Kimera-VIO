@@ -163,6 +163,11 @@ bool GraphTimeCentricBackendAdapter::initialize() {
       return false;
     }
     
+    state_timestamps_.clear();
+    ordered_state_handles_.clear();
+    keyframe_state_handles_.clear();
+    num_states_ = 0;
+
     initialized_ = true;
     LOG(INFO) << "GraphTimeCentricBackendAdapter: initialized successfully";
     return true;
@@ -205,53 +210,89 @@ bool GraphTimeCentricBackendAdapter::bufferNonKeyframeState(
   return true;
 }
 
-void GraphTimeCentricBackendAdapter::addKeyframeState(
+fgo::integration::StateHandle GraphTimeCentricBackendAdapter::addKeyframeState(
     const Timestamp& timestamp,
+    FrameId frame_id,
     const gtsam::Pose3& pose,
     const gtsam::Vector3& velocity,
-    const gtsam::imuBias::ConstantBias& bias,
-    const ImuFrontend::PimPtr& pim) {
+    const gtsam::imuBias::ConstantBias& bias) {
+  fgo::integration::StateHandle handle;
+
   if (!initialized_) {
     LOG(ERROR) << "GraphTimeCentricBackendAdapter: not initialized, cannot add keyframe";
-    return;
+    return handle;
   }
-  
+
   const double keyframe_timestamp_sec = timestampToSeconds(timestamp);
-  
-  LOG(INFO) << "GraphTimeCentricBackendAdapter: adding keyframe at t="
-            << std::fixed << std::setprecision(6) << keyframe_timestamp_sec;
-  
+
+  LOG(INFO) << "GraphTimeCentricBackendAdapter: adding keyframe " << frame_id
+            << " at t=" << std::fixed << std::setprecision(6)
+            << keyframe_timestamp_sec;
+
   try {
-    auto keyframe_state_handle = integration_interface_->createStateAtTimestamp(
+    handle = integration_interface_->addKeyframeState(
         keyframe_timestamp_sec, pose, velocity, bias);
-    
-    if (keyframe_state_handle.valid) {
+
+    if (handle.valid) {
       state_timestamps_.push_back(keyframe_timestamp_sec);
       num_states_++;
-      
-      // Store PIM for this keyframe (preintegration from previous to current keyframe)
-      if (pim) {
-        keyframe_pims_.push_back(pim);
-        LOG(INFO) << "GraphTimeCentricBackendAdapter: stored PIM for keyframe at t=" 
-                  << keyframe_timestamp_sec;
-      } else {
-        keyframe_pims_.push_back(nullptr);
-        LOG(WARNING) << "GraphTimeCentricBackendAdapter: no PIM provided for keyframe at t=" 
-                     << keyframe_timestamp_sec;
-      }
-      
-      LOG(INFO) << "GraphTimeCentricBackendAdapter: created keyframe state " 
-                << keyframe_state_handle.index 
-                << " at timestamp " << keyframe_state_handle.timestamp 
-                << " (total states: " << num_states_ << ")";
+      ordered_state_handles_.push_back(handle);
+      keyframe_state_handles_[frame_id] = handle;
+
+      LOG(INFO) << "GraphTimeCentricBackendAdapter: created keyframe state "
+                << handle.index << " at timestamp " << handle.timestamp
+                << " (frame_id=" << frame_id << ", total states: " << num_states_
+                << ")";
     } else {
-      LOG(WARNING) << "GraphTimeCentricBackendAdapter: failed to create keyframe state at t=" 
-                   << keyframe_timestamp_sec;
+      LOG(WARNING)
+          << "GraphTimeCentricBackendAdapter: failed to create keyframe state at t="
+          << keyframe_timestamp_sec;
     }
-    
   } catch (const std::exception& e) {
-    LOG(ERROR) << "GraphTimeCentricBackendAdapter: failed to add keyframe: " << e.what();
+    LOG(ERROR) << "GraphTimeCentricBackendAdapter: failed to add keyframe: "
+               << e.what();
   }
+
+  return handle;
+}
+
+bool GraphTimeCentricBackendAdapter::addImuFactorBetween(
+    const FrameId& previous_frame_id,
+    const FrameId& current_frame_id,
+    const ImuFrontend::PimPtr& pim) {
+  if (!initialized_) {
+    LOG(ERROR) << "GraphTimeCentricBackendAdapter: not initialized, cannot add IMU factor";
+    return false;
+  }
+
+  if (!pim) {
+    LOG(WARNING) << "GraphTimeCentricBackendAdapter: null PIM provided for IMU factor";
+    return false;
+  }
+
+  auto prev_it = keyframe_state_handles_.find(previous_frame_id);
+  auto curr_it = keyframe_state_handles_.find(current_frame_id);
+
+  if (prev_it == keyframe_state_handles_.end() ||
+      curr_it == keyframe_state_handles_.end()) {
+    LOG(WARNING) << "GraphTimeCentricBackendAdapter: cannot add IMU factor between frame "
+                 << previous_frame_id << " and " << current_frame_id
+                 << " (state handle missing)";
+    return false;
+  }
+
+  bool success = integration_interface_->addImuFactorBetween(
+      prev_it->second,
+      curr_it->second,
+      pim);
+
+  if (!success) {
+    LOG(WARNING) << "GraphTimeCentricBackendAdapter: failed to add IMU factor between frame "
+                 << previous_frame_id << " and " << current_frame_id;
+    return false;
+  }
+
+  return true;
 }
 
 bool GraphTimeCentricBackendAdapter::optimizeGraph() {
@@ -269,34 +310,10 @@ bool GraphTimeCentricBackendAdapter::optimizeGraph() {
             << state_timestamps_.size() << " states";
   
   try {
-    // Forward stored PIM values to interface for IMU factor creation
-    // PIM[i] corresponds to preintegration from state[i-1] to state[i]
-    if (!keyframe_pims_.empty() && keyframe_pims_.size() == state_timestamps_.size()) {
-      std::vector<std::pair<double, std::shared_ptr<gtsam::PreintegrationType>>> pim_data;
-      
-      for (size_t i = 0; i < keyframe_pims_.size(); ++i) {
-        if (keyframe_pims_[i]) {
-          // Convert Kimera's PIM to GTSAM's PreintegrationType
-          // The PIM is already a PreintegrationType, we just need to store it
-          std::shared_ptr<gtsam::PreintegrationType> pim_shared = keyframe_pims_[i];
-          pim_data.push_back({state_timestamps_[i], pim_shared});
-        }
-      }
-      
-      if (!pim_data.empty()) {
-        integration_interface_->addPreintegratedIMUData(pim_data);
-        LOG(INFO) << "GraphTimeCentricBackendAdapter: forwarded " 
-                  << pim_data.size() << " PIM values for IMU factor creation";
-      }
-      keyframe_pims_.clear();
-      LOG(DEBUG) << "GraphTimeCentricBackendAdapter: Cleared keyframe PIM buffer after forwarding";
-    }
-    
-    // Trigger optimization through the interface
     auto result = integration_interface_->optimize();
-    
+
     if (result.success) {
-      if (result.num_states > 0) {
+      if (!state_timestamps_.empty()) {
           last_optimization_time_ = state_timestamps_.back();
           LOG(INFO) << "GraphTimeCentricBackendAdapter: optimization succeeded"
                     << " - optimized " << result.num_states << " states"
@@ -309,7 +326,7 @@ bool GraphTimeCentricBackendAdapter::optimizeGraph() {
       LOG(ERROR) << "GraphTimeCentricBackendAdapter: optimization failed: " << result.error_message;
       return false;
     }
-    
+
   } catch (const std::exception& e) {
     LOG(ERROR) << "GraphTimeCentricBackendAdapter: optimization failed with exception: " << e.what();
     return false;
@@ -469,11 +486,11 @@ std::optional<gtsam::Matrix> GraphTimeCentricBackendAdapter::getLatestStateCovar
 }
 
 
-bool GraphTimeCentricBackendAdapter::addStateValues(unsigned long /*frame_id*/, double timestamp, const gtsam::NavState& navstate) {
+bool GraphTimeCentricBackendAdapter::addStateValues(unsigned long frame_id, double timestamp, const gtsam::NavState& navstate) {
   Timestamp kimera_timestamp = static_cast<Timestamp>(timestamp * 1e9);
   gtsam::imuBias::ConstantBias bias;
   ImuFrontend::PimPtr null_pim = nullptr;
-  addKeyframeState(kimera_timestamp, navstate.pose(), navstate.velocity(), bias, null_pim);
+  addKeyframeState(kimera_timestamp, FrameId(frame_id), navstate.pose(), navstate.velocity(), bias);
   return true;
 }
 
@@ -558,7 +575,10 @@ std::optional<fgo::integration::StateHandle> GraphTimeCentricBackendAdapter::fin
   }
   
   const size_t state_index = std::distance(state_timestamps_.begin(), it);
-  return fgo::integration::StateHandle(state_index, closest_time);
+  if (state_index >= ordered_state_handles_.size()) {
+    return std::nullopt;
+  }
+  return ordered_state_handles_[state_index];
 }
 
 } // namespace VIO

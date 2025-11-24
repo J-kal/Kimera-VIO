@@ -300,6 +300,12 @@ class VioBackend {
 
  private:
   bool addVisualInertialStateAndOptimize(const BackendInput& input);
+  bool addVisualInertialStateAndOptimizeGraphTimeCentric(
+      const Timestamp& timestamp_kf_nsec,
+      const StatusSmartStereoMeasurements& status_smart_stereo_measurements_kf,
+      const ImuFrontEnd::PimPtr& pim,
+      const gtsam::Pose3& body_lkf_OdomPose_body_kf,
+      const gtsam::Vector3& body_kf_world_OdomVel_body_kf);
 
   // Add initial prior factors.
   void addInitialPriorFactors(const FrameId& frame_id);

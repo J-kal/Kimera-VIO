@@ -460,71 +460,22 @@ bool VioBackend::addVisualInertialStateAndOptimize(
 bool VioBackend::addVisualInertialStateAndOptimize(const BackendInput& input) {
   VLOG(10) << "Add visual inertial state and optimize.";
   CHECK(input.pim_);
-  
-  // BUFFERING DISABLED: GraphTimeCentric adapter processes keyframes only
-  // Pipeline filters non-keyframes, so all frames here are keyframes.
-  // IMU data comes directly from keyframe measurements.
-  //
-  // TO RESTORE NON-KEYFRAME BUFFERING:
-  // 1. Restore the 'if (!input.is_keyframe_)' branch below
-  // 2. Call graph_time_centric_adapter_->bufferNonKeyframeState() for non-keyframes
-  // 3. Update addKeyframeState() to process buffered states (see adapter code)
-  
+
   if (backend_params_.use_graph_time_centric && graph_time_centric_adapter_) {
-    VLOG(2) << "Using GraphTimeCentric adapter for keyframe processing";
-    
-    // Extract state estimate from preintegration
-    gtsam::NavState navstate_lkf(W_Pose_B_lkf_from_state_, W_Vel_B_lkf_);
-    const gtsam::NavState& navstate_k = input.pim_->predict(navstate_lkf, imu_bias_lkf_);
-    
-    // Process keyframe only (buffering disabled)
-    CHECK(input.is_keyframe_) << "Non-keyframe should not reach backend with buffering disabled";
-    
-    // Add keyframe state with preintegrated IMU measurements (pim_)
-    // The pim_ contains preintegrated measurements from last keyframe to current keyframe
-    graph_time_centric_adapter_->addKeyframeState(
+    CHECK(input.status_stereo_measurements_kf_);
+    bool is_smoother_ok = addVisualInertialStateAndOptimizeGraphTimeCentric(
         input.timestamp_,
-        navstate_k.pose(),
-        navstate_k.velocity(),
-        imu_bias_lkf_,
-        input.pim_);
-    
-    // Trigger optimization
-    bool optimization_success = graph_time_centric_adapter_->optimizeGraph();
-    
-    if (optimization_success) {
-      // Retrieve optimized state
-      const double timestamp_sec = static_cast<double>(input.timestamp_) / 1e9;
-      
-      auto opt_pose = graph_time_centric_adapter_->getOptimizedPoseAtTime(timestamp_sec);
-      auto opt_vel = graph_time_centric_adapter_->getOptimizedVelocityAtTime(timestamp_sec);
-      auto opt_bias = graph_time_centric_adapter_->getOptimizedBiasAtTime(timestamp_sec);
-      
-      if (opt_pose && opt_vel && opt_bias) {
-        // Update backend state with optimized values
-        W_Pose_B_lkf_from_state_ = *opt_pose;
-        W_Vel_B_lkf_ = *opt_vel;
-        imu_bias_lkf_ = *opt_bias;
-        
-        VLOG(2) << "Updated backend state from GraphTimeCentric optimization";
-      } else {
-        LOG(ERROR) << "Failed to retrieve optimized state from GraphTimeCentric";
-      }
-    } else {
-      LOG(ERROR) << "GraphTimeCentric optimization failed";
-    }
-    
-    // Update bookkeeping
-    last_kf_id_ = curr_kf_id_;
-    ++curr_kf_id_;
-    timestamp_lkf_ = input.timestamp_;
-    
-    return optimization_success;
+        *input.status_stereo_measurements_kf_,
+        input.pim_,
+        input.body_lkf_OdomPose_body_kf_,
+        input.body_kf_world_OdomVel_body_kf_);
+        timestamp_lkf_ = input.timestamp_;
+    return is_smoother_ok;
   }
-  
+
   // Default path: use native Kimera backend (keyframes only)
   CHECK(input.is_keyframe_) << "Only keyframes should reach backend";
-  
+
   CHECK(input.status_stereo_measurements_kf_);
   bool is_smoother_ok = addVisualInertialStateAndOptimize(
       input.timestamp_,  // Current time for fixed lag smoother.
@@ -535,6 +486,82 @@ bool VioBackend::addVisualInertialStateAndOptimize(const BackendInput& input) {
   // Bookkeeping
   timestamp_lkf_ = input.timestamp_;
   return is_smoother_ok;
+}
+
+bool VioBackend::addVisualInertialStateAndOptimizeGraphTimeCentric(
+    const Timestamp& timestamp,
+    const StatusSmartStereoMeasurements& status_smart_stereo_measurements_kf,
+    const ImuFrontEnd::PimPtr& pim,
+    const gtsam::Pose3& body_lkf_OdomPose_body_kf,
+    const gtsam::Vector3& body_kf_world_OdomVel_body_kf) {
+  static_cast<void>(status_smart_stereo_measurements_kf);
+  static_cast<void>(body_lkf_OdomPose_body_kf);
+  static_cast<void>(body_kf_world_OdomVel_body_kf);
+
+  
+  CHECK(backend_params_.use_graph_time_centric);
+  CHECK(graph_time_centric_adapter_);
+  CHECK(pim);
+
+  VLOG(2) << "Using GraphTimeCentric adapter for keyframe processing";
+  
+  last_kf_id_ = curr_kf_id_;
+  ++curr_kf_id_;
+
+  // Extract state estimate from preintegration
+  gtsam::NavState navstate_lkf(W_Pose_B_lkf_from_state_, W_Vel_B_lkf_);
+  const gtsam::NavState& navstate_k = pim->predict(navstate_lkf, imu_bias_lkf_);
+
+  auto state_handle = graph_time_centric_adapter_->addKeyframeState(
+      timestamp,
+      curr_kf_id_,
+      navstate_k.pose(),
+      navstate_k.velocity(),
+      imu_bias_lkf_);
+
+  if (!state_handle.valid) {
+    LOG(ERROR) << "GraphTimeCentric: failed to add keyframe state for id "
+               << curr_kf_id_;
+    return false;
+  }
+
+  if (last_kf_id_ != 0) {
+    if (!graph_time_centric_adapter_->addImuFactorBetween(last_kf_id_, curr_kf_id_, pim)) {
+      LOG(ERROR) << "GraphTimeCentric: failed to add IMU factor between "
+                 << last_kf_id_ << " and " << curr_kf_id_;
+      return false;
+    }
+  }
+
+  // Trigger optimization
+  bool optimization_success = graph_time_centric_adapter_->optimizeGraph();
+
+  if (optimization_success) {
+    // Retrieve optimized state
+    const double timestamp_sec = static_cast<double>(timestamp) / 1e9;
+
+    auto opt_pose = graph_time_centric_adapter_->getOptimizedPoseAtTime(timestamp_sec);
+    auto opt_vel = graph_time_centric_adapter_->getOptimizedVelocityAtTime(timestamp_sec);
+    auto opt_bias = graph_time_centric_adapter_->getOptimizedBiasAtTime(timestamp_sec);
+
+    if (opt_pose && opt_vel && opt_bias) {
+      // Update backend state with optimized values
+      W_Pose_B_lkf_from_state_ = *opt_pose;
+      W_Vel_B_lkf_ = *opt_vel;
+      imu_bias_lkf_ = *opt_bias;
+
+      VLOG(2) << "Updated backend state from GraphTimeCentric optimization";
+    } else {
+      LOG(ERROR) << "Failed to retrieve optimized state from GraphTimeCentric";
+    }
+  } else {
+    LOG(ERROR) << "GraphTimeCentric optimization failed";
+  }
+
+  // Update bookkeeping
+  timestamp_lkf_ = timestamp;
+
+  return optimization_success;
 }
 
 // TODO(Toni): no need to pass landmarks_kf, can iterate directly over feature

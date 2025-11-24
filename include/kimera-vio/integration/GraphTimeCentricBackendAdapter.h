@@ -27,6 +27,7 @@
 #include <vector>
 #include <deque>
 #include <map>
+#include <unordered_map>
 #include <mutex>
 #include <optional>
 
@@ -148,12 +149,16 @@ public:
    * 1. Create state at keyframe timestamp
    * 2. Store PIM for later IMU factor creation
    */
-  void addKeyframeState(
+  fgo::integration::StateHandle addKeyframeState(
       const Timestamp& timestamp,
+      FrameId frame_id,
       const gtsam::Pose3& pose,
       const gtsam::Vector3& velocity,
-      const gtsam::imuBias::ConstantBias& bias,
-      const ImuFrontend::PimPtr& pim);
+      const gtsam::imuBias::ConstantBias& bias);
+
+  bool addImuFactorBetween(const FrameId& previous_frame_id,
+                           const FrameId& current_frame_id,
+                           const ImuFrontend::PimPtr& pim);
 
 
   /**
@@ -325,10 +330,8 @@ private:
   double last_optimization_time_;
   double last_imu_timestamp_sec_;
   std::vector<double> state_timestamps_;
-  
-  // Store preintegrated IMU measurements for each keyframe
-  // PIM[i] is the preintegration from keyframe[i-1] to keyframe[i]
-  std::vector<ImuFrontend::PimPtr> keyframe_pims_;
+  std::vector<fgo::integration::StateHandle> ordered_state_handles_;
+  std::unordered_map<FrameId, fgo::integration::StateHandle> keyframe_state_handles_;
   
   // Buffering
   struct BufferedState {
