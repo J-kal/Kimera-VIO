@@ -22,6 +22,7 @@
 #include <sstream>
 #include <chrono>
 #include <algorithm>
+#include <functional>
 #include <cmath>
 #include <iomanip>
 
@@ -99,9 +100,11 @@ namespace VIO {
 
 GraphTimeCentricBackendAdapter::GraphTimeCentricBackendAdapter(
     const BackendParams& backend_params,
-    const ImuParams& imu_params)
+    const ImuParams& imu_params,
+    SmootherUpdateCallback smoother_update_cb)
     : backend_params_(backend_params)
     , imu_params_(imu_params)
+    , smoother_update_cb_(std::move(smoother_update_cb))
     , initialized_(false)
     , num_states_(0)
     , last_optimization_time_(0.0)
@@ -162,9 +165,7 @@ bool GraphTimeCentricBackendAdapter::initialize() {
       LOG(ERROR) << "GraphTimeCentricBackendAdapter: failed to initialize interface";
       return false;
     }
-    
     state_timestamps_.clear();
-    ordered_state_handles_.clear();
     keyframe_state_handles_.clear();
     num_states_ = 0;
 
@@ -236,7 +237,6 @@ fgo::integration::StateHandle GraphTimeCentricBackendAdapter::addKeyframeState(
     if (handle.valid) {
       state_timestamps_.push_back(keyframe_timestamp_sec);
       num_states_++;
-      ordered_state_handles_.push_back(handle);
       keyframe_state_handles_[frame_id] = handle;
 
       LOG(INFO) << "GraphTimeCentricBackendAdapter: created keyframe state "
@@ -309,28 +309,62 @@ bool GraphTimeCentricBackendAdapter::optimizeGraph() {
   LOG(INFO) << "GraphTimeCentricBackendAdapter: optimizing graph with " 
             << state_timestamps_.size() << " states";
   
-  try {
-    auto result = integration_interface_->optimize();
-
-    if (result.success) {
-      if (!state_timestamps_.empty()) {
-          last_optimization_time_ = state_timestamps_.back();
-          LOG(INFO) << "GraphTimeCentricBackendAdapter: optimization succeeded"
-                    << " - optimized " << result.num_states << " states"
-                    << ", time: " << result.optimization_time_ms << " ms";
-      } else {
-          LOG(WARNING) << "GraphTimeCentricBackendAdapter: optimization skipped, no states were optimized.";
-      }
-      return true;
-    } else {
-      LOG(ERROR) << "GraphTimeCentricBackendAdapter: optimization failed: " << result.error_message;
-      return false;
-    }
-
-  } catch (const std::exception& e) {
-    LOG(ERROR) << "GraphTimeCentricBackendAdapter: optimization failed with exception: " << e.what();
+  if (!smoother_update_cb_) {
+    LOG(ERROR) << "GraphTimeCentricBackendAdapter: smoother callback not set";
     return false;
   }
+
+  fgo::integration::KimeraIntegrationInterface::IncrementalUpdatePacket packet;
+  
+  // CRITICAL DEBUG: Log before calling buildIncrementalUpdate
+  
+  LOG(INFO) << "GraphTimeCentricBackendAdapter: calling buildIncrementalUpdate...";
+  
+  bool build_result = integration_interface_->buildIncrementalUpdate(&packet);
+  
+  if (!build_result) {
+    LOG(WARNING) << "GraphTimeCentricBackendAdapter: no incremental update available";
+    return false;
+  }
+
+  // Debug contents of incremental update before handing to smoother.
+  LOG(INFO) << "GraphTimeCentricBackendAdapter: incremental update packet - "
+            << "factors=" << packet.factors.size()
+            << ", values=" << packet.values.size()
+            << ", key_timestamps=" << packet.key_timestamps.size();
+
+  if (packet.factors.empty()) {
+    LOG(WARNING) << "GraphTimeCentricBackendAdapter: packet.factors is empty before smoother call";
+  }
+  if (packet.values.empty()) {
+    LOG(WARNING) << "GraphTimeCentricBackendAdapter: packet.values is empty before smoother call";
+  }
+  if (packet.key_timestamps.empty()) {
+    LOG(WARNING) << "GraphTimeCentricBackendAdapter: packet.key_timestamps is empty before smoother call";
+  }
+
+  std::map<gtsam::Key, double> timestamps(packet.key_timestamps.begin(),
+                                          packet.key_timestamps.end());
+
+  Smoother::Result result;
+  gtsam::FactorIndices delete_slots;
+
+  bool status = smoother_update_cb_(
+      &result, packet.factors, packet.values, timestamps, delete_slots);
+
+  if (!status) {
+    LOG(ERROR) << "GraphTimeCentricBackendAdapter: smoother update failed";
+    return false;
+  }
+
+  integration_interface_->markIncrementalUpdateConsumed();
+
+  if (!state_timestamps_.empty()) {
+    last_optimization_time_ = state_timestamps_.back();
+  }
+
+  LOG(INFO) << "GraphTimeCentricBackendAdapter: optimization via backend smoother succeeded";
+  return true;
 }
 
 bool GraphTimeCentricBackendAdapter::optimize(double /*timestep*/) {
@@ -339,150 +373,6 @@ bool GraphTimeCentricBackendAdapter::optimize(double /*timestep*/) {
 
 double GraphTimeCentricBackendAdapter::getLastOptimizationTime() const {
   return last_optimization_time_;
-}
-
-std::optional<gtsam::Pose3> GraphTimeCentricBackendAdapter::getOptimizedPoseAtTime(double timestamp) const {
-  if (!initialized_ || !integration_interface_) {
-    LOG(ERROR) << "GraphTimeCentricBackendAdapter: not initialized";
-    return std::nullopt;
-  }
-  
-  auto state_handle = findStateHandleNearTimestamp(timestamp);
-  if (!state_handle.has_value()) {
-    return std::nullopt;
-  }
-  
-  auto nav_state = integration_interface_->getOptimizedState(state_handle.value());
-  if (nav_state.has_value()) {
-    return nav_state->pose();
-  }
-  
-  return std::nullopt;
-}
-
-std::optional<gtsam::Vector3> GraphTimeCentricBackendAdapter::getOptimizedVelocityAtTime(double timestamp) const {
-  if (!initialized_ || !integration_interface_) {
-    return std::nullopt;
-  }
-  
-  auto state_handle = findStateHandleNearTimestamp(timestamp);
-  if (!state_handle.has_value()) {
-    return std::nullopt;
-  }
-  
-  auto nav_state = integration_interface_->getOptimizedState(state_handle.value());
-  if (nav_state.has_value()) {
-    return nav_state->velocity();
-  }
-  
-  return std::nullopt;
-}
-
-std::optional<gtsam::imuBias::ConstantBias> GraphTimeCentricBackendAdapter::getOptimizedBiasAtTime(double timestamp) const {
-  if (!initialized_ || !integration_interface_) {
-    return std::nullopt;
-  }
-  
-  auto state_handle = findStateHandleNearTimestamp(timestamp);
-  if (!state_handle.has_value()) {
-    return std::nullopt;
-  }
-  
-  return integration_interface_->getOptimizedBias(state_handle.value());
-}
-
-std::optional<gtsam::Matrix> GraphTimeCentricBackendAdapter::getStateCovarianceAtTime(double timestamp) const {
-  if (!initialized_ || !integration_interface_) {
-    return std::nullopt;
-  }
-  
-  auto state_handle = findStateHandleNearTimestamp(timestamp);
-  if (!state_handle.has_value()) {
-    return std::nullopt;
-  }
-  
-  return integration_interface_->getStateCovariance(state_handle.value());
-}
-
-gtsam::Values GraphTimeCentricBackendAdapter::getLastResult() {
-  gtsam::Values values;
-  
-  if (!initialized_ || state_timestamps_.empty()) {
-    return values;
-  }
-  
-  try {
-    for (const auto& timestamp : state_timestamps_) {
-      auto state_handle = findStateHandleNearTimestamp(timestamp);
-      if (!state_handle.has_value()) {
-        continue;
-      }
-      
-      auto nav_state = integration_interface_->getOptimizedState(state_handle.value());
-      auto bias = integration_interface_->getOptimizedBias(state_handle.value());
-      
-      if (nav_state.has_value()) {
-        gtsam::Key pose_key = gtsam::Symbol('x', state_handle->index).key();
-        gtsam::Key vel_key = gtsam::Symbol('v', state_handle->index).key();
-        gtsam::Key bias_key = gtsam::Symbol('b', state_handle->index).key();
-        
-        values.insert(pose_key, nav_state->pose());
-        values.insert(vel_key, nav_state->velocity());
-        if (bias.has_value()) {
-          values.insert(bias_key, bias.value());
-        }
-      }
-    }
-  } catch (const std::exception& e) {
-    LOG(ERROR) << "GraphTimeCentricBackendAdapter: failed to get last result: " << e.what();
-  }
-  
-  return values;
-}
-
-std::optional<gtsam::NavState> GraphTimeCentricBackendAdapter::getStateAtTime(Timestamp timestamp) {
-  const double timestamp_sec = timestampToSeconds(timestamp);
-  auto state_handle = findStateHandleNearTimestamp(timestamp_sec);
-  if (!state_handle.has_value()) {
-    return std::nullopt;
-  }
-  return integration_interface_->getOptimizedState(state_handle.value());
-}
-
-std::optional<gtsam::NavState> GraphTimeCentricBackendAdapter::getLatestState() {
-  if (!initialized_ || !integration_interface_) {
-    return std::nullopt;
-  }
-  return integration_interface_->getLatestOptimizedState();
-}
-
-std::optional<gtsam::imuBias::ConstantBias> GraphTimeCentricBackendAdapter::getLatestIMUBias() {
-  if (!initialized_ || !integration_interface_) {
-    return std::nullopt;
-  }
-  return integration_interface_->getLatestOptimizedBias();
-}
-
-std::optional<gtsam::Matrix> GraphTimeCentricBackendAdapter::getStateCovariance(Timestamp timestamp) {
-  const double timestamp_sec = timestampToSeconds(timestamp);
-  auto state_handle = findStateHandleNearTimestamp(timestamp_sec);
-  if (!state_handle.has_value()) {
-    return std::nullopt;
-  }
-  return integration_interface_->getStateCovariance(state_handle.value());
-}
-
-std::optional<gtsam::Matrix> GraphTimeCentricBackendAdapter::getLatestStateCovariance() {
-  if (!initialized_ || state_timestamps_.empty()) {
-    return std::nullopt;
-  }
-  
-  const double latest_timestamp = state_timestamps_.back();
-  auto state_handle = findStateHandleNearTimestamp(latest_timestamp);
-  if (!state_handle.has_value()) {
-    return std::nullopt;
-  }
-  return integration_interface_->getStateCovariance(state_handle.value());
 }
 
 
@@ -551,34 +441,6 @@ fgo::integration::KimeraIntegrationParams GraphTimeCentricBackendAdapter::create
             << ", smoother_lag=" << params.smoother_lag;
   
   return params;
-}
-
-std::optional<fgo::integration::StateHandle> GraphTimeCentricBackendAdapter::findStateHandleNearTimestamp(double timestamp) const {
-  if (state_timestamps_.empty()) {
-    return std::nullopt;
-  }
-  
-  auto it = std::min_element(state_timestamps_.begin(), state_timestamps_.end(),
-                             [timestamp](double a, double b) {
-                               return std::abs(a - timestamp) < std::abs(b - timestamp);
-                             });
-  
-  if (it == state_timestamps_.end()) {
-    return std::nullopt;
-  }
-  
-  const double closest_time = *it;
-  const double tolerance = 0.1;
-  
-  if (std::abs(closest_time - timestamp) > tolerance) {
-    return std::nullopt;
-  }
-  
-  const size_t state_index = std::distance(state_timestamps_.begin(), it);
-  if (state_index >= ordered_state_handles_.size()) {
-    return std::nullopt;
-  }
-  return ordered_state_handles_[state_index];
 }
 
 } // namespace VIO

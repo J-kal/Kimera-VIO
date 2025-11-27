@@ -142,7 +142,15 @@ VioBackend::VioBackend(const gtsam::Pose3& B_Pose_leftCamRect,
     LOG(INFO) << "Initializing GraphTimeCentric adapter...";
     graph_time_centric_adapter_ =
         std::make_unique<GraphTimeCentricBackendAdapter>(
-            backend_params_, imu_params_);
+            backend_params_, imu_params_,
+            [this](Smoother::Result* result,
+                   const gtsam::NonlinearFactorGraph& new_factors,
+                   const gtsam::Values& new_values,
+                   const std::map<gtsam::Key, double>& timestamps,
+                   const gtsam::FactorIndices& delete_slots) {
+              return this->updateSmoother(
+                  result, new_factors, new_values, timestamps, delete_slots);
+            });
     if (!graph_time_centric_adapter_->initialize()) {
       LOG(FATAL) << "Failed to initialize GraphTimeCentric adapter.";
     }
@@ -490,10 +498,10 @@ bool VioBackend::addVisualInertialStateAndOptimize(const BackendInput& input) {
 
 bool VioBackend::addVisualInertialStateAndOptimizeGraphTimeCentric(
     const Timestamp& timestamp,
-    const StatusSmartStereoMeasurements& status_smart_stereo_measurements_kf,
-    const ImuFrontEnd::PimPtr& pim,
-    const gtsam::Pose3& body_lkf_OdomPose_body_kf,
-    const gtsam::Vector3& body_kf_world_OdomVel_body_kf) {
+    const StatusStereoMeasurements& status_smart_stereo_measurements_kf,
+    const ImuFrontend::PimPtr& pim,
+    const std::optional<gtsam::Pose3>& body_lkf_OdomPose_body_kf,
+    const std::optional<gtsam::Vector3>& body_kf_world_OdomVel_body_kf) {
   static_cast<void>(status_smart_stereo_measurements_kf);
   static_cast<void>(body_lkf_OdomPose_body_kf);
   static_cast<void>(body_kf_world_OdomVel_body_kf);
@@ -537,23 +545,7 @@ bool VioBackend::addVisualInertialStateAndOptimizeGraphTimeCentric(
   bool optimization_success = graph_time_centric_adapter_->optimizeGraph();
 
   if (optimization_success) {
-    // Retrieve optimized state
-    const double timestamp_sec = static_cast<double>(timestamp) / 1e9;
-
-    auto opt_pose = graph_time_centric_adapter_->getOptimizedPoseAtTime(timestamp_sec);
-    auto opt_vel = graph_time_centric_adapter_->getOptimizedVelocityAtTime(timestamp_sec);
-    auto opt_bias = graph_time_centric_adapter_->getOptimizedBiasAtTime(timestamp_sec);
-
-    if (opt_pose && opt_vel && opt_bias) {
-      // Update backend state with optimized values
-      W_Pose_B_lkf_from_state_ = *opt_pose;
-      W_Vel_B_lkf_ = *opt_vel;
-      imu_bias_lkf_ = *opt_bias;
-
-      VLOG(2) << "Updated backend state from GraphTimeCentric optimization";
-    } else {
-      LOG(ERROR) << "Failed to retrieve optimized state from GraphTimeCentric";
-    }
+    updateStates(curr_kf_id_);
   } else {
     LOG(ERROR) << "GraphTimeCentric optimization failed";
   }
@@ -892,7 +884,7 @@ void VioBackend::addStereoMeasurementsToFeatureTracks(
     } else {
       // @TODO: It seems that this else condition does not help --
       // conjecture that it creates long feature tracks with low information
-      // (i.e. we're not moving)
+      // (i.e. we're not moving) 
       // This is problematic in conjunction with our landmark selection
       // mechanism which prioritizes long feature tracks
 

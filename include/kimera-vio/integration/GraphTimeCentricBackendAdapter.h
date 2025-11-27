@@ -25,33 +25,21 @@
 
 #include <memory>
 #include <vector>
-#include <deque>
 #include <map>
 #include <unordered_map>
 #include <mutex>
-#include <optional>
+#include <functional>
 
 #include <gtsam/geometry/Pose3.h>
 #include <gtsam/navigation/NavState.h>
 #include <gtsam/navigation/ImuBias.h>
 #include <gtsam/nonlinear/Values.h>
+#include <gtsam/nonlinear/NonlinearFactorGraph.h>
 
 #include "kimera-vio/backend/VioBackend-definitions.h"
 #include "kimera-vio/backend/VioBackendParams.h"
 #include "kimera-vio/imu-frontend/ImuFrontend-definitions.h"
-
-// Forward declare to avoid hard dependency when not compiled in
-namespace fgo {
-  namespace integration {
-    class KimeraIntegrationInterface;
-    struct KimeraIntegrationParams;
-    struct StateHandle;
-    struct OptimizationResult;
-  }
-  namespace core {
-    class ApplicationInterface;
-  }
-}
+#include "online_fgo_core/integration/KimeraIntegrationInterface.h"
 
 namespace VIO {
 
@@ -80,13 +68,21 @@ namespace VIO {
  */
 class GraphTimeCentricBackendAdapter {
 public:
+  using SmootherUpdateCallback = std::function<bool(
+      Smoother::Result*,
+      const gtsam::NonlinearFactorGraph&,
+      const gtsam::Values&,
+      const std::map<gtsam::Key, double>&,
+      const gtsam::FactorIndices&)>;
+
   /**
    * @brief Constructor
    * @param backend_params Kimera backend parameters
    * @param imu_params IMU parameters
    */
   GraphTimeCentricBackendAdapter(const BackendParams& backend_params,
-                                  const ImuParams& imu_params);
+                                 const ImuParams& imu_params,
+                                 SmootherUpdateCallback smoother_update_cb = SmootherUpdateCallback());
 
   /**
    * @brief Destructor
@@ -203,72 +199,6 @@ public:
   // RESULT RETRIEVAL
   // ========================================================================
 
-  /**
-   * @brief Get optimized NavState at specific timestamp
-   * @param timestamp Timestamp to query
-   * @return NavState if available at that time
-   */
-  std::optional<gtsam::NavState> getStateAtTime(Timestamp timestamp);
-
-  /**
-   * @brief Get optimized Pose3 at specific timestamp (seconds)
-   * @param timestamp Timestamp in seconds
-   * @return Pose3 if available
-   */
-  std::optional<gtsam::Pose3> getOptimizedPoseAtTime(double timestamp) const;
-
-  /**
-   * @brief Get optimized velocity at specific timestamp (seconds)
-   * @param timestamp Timestamp in seconds
-   * @return Velocity vector if available
-   */
-  std::optional<gtsam::Vector3> getOptimizedVelocityAtTime(double timestamp) const;
-
-  /**
-   * @brief Get optimized IMU bias at specific timestamp (seconds)
-   * @param timestamp Timestamp in seconds
-   * @return IMU bias if available
-   */
-  std::optional<gtsam::imuBias::ConstantBias> getOptimizedBiasAtTime(double timestamp) const;
-
-  /**
-   * @brief Get state covariance at specific timestamp (seconds)
-   * @param timestamp Timestamp in seconds
-   * @return Covariance matrix if available
-   */
-  std::optional<gtsam::Matrix> getStateCovarianceAtTime(double timestamp) const;
-
-  /**
-   * @brief Get latest optimized NavState
-   * @return Most recent NavState after optimization
-   */
-  std::optional<gtsam::NavState> getLatestState();
-
-  /**
-   * @brief Get latest optimized IMU bias
-   * @return Most recent bias estimate
-   */
-  std::optional<gtsam::imuBias::ConstantBias> getLatestIMUBias();
-
-  /**
-   * @brief Get state covariance at timestamp
-   * @param timestamp Timestamp to query
-   * @return Covariance matrix if available
-   */
-  std::optional<gtsam::Matrix> getStateCovariance(Timestamp timestamp);
-
-  /**
-   * @brief Get latest state covariance
-   * @return Covariance for most recent state
-   */
-  std::optional<gtsam::Matrix> getLatestStateCovariance();
-
-  /**
-   * @brief Get last optimization result as gtsam::Values (legacy interface)
-   * @return GTSAM values with all optimized variables
-   */
-  gtsam::Values getLastResult();
-
   // ========================================================================
   // STATISTICS AND DIAGNOSTICS
   // ========================================================================
@@ -323,6 +253,7 @@ private:
   // Integration interface to online_fgo_core (forward declared)
   std::unique_ptr<fgo::integration::KimeraIntegrationInterface> integration_interface_;
   std::unique_ptr<fgo::core::ApplicationInterface> standalone_app_;
+  SmootherUpdateCallback smoother_update_cb_;
   
   // State
   bool initialized_;
@@ -330,7 +261,6 @@ private:
   double last_optimization_time_;
   double last_imu_timestamp_sec_;
   std::vector<double> state_timestamps_;
-  std::vector<fgo::integration::StateHandle> ordered_state_handles_;
   std::unordered_map<FrameId, fgo::integration::StateHandle> keyframe_state_handles_;
   
   // Buffering
@@ -349,7 +279,6 @@ private:
   
   // Helper methods
   fgo::integration::KimeraIntegrationParams createIntegrationParams() const;
-  std::optional<fgo::integration::StateHandle> findStateHandleNearTimestamp(double timestamp) const;
 };
 
 } // namespace VIO

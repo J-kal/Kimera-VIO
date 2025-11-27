@@ -111,4 +111,4 @@ enable_factor_graph_debug_logging: 1
 # 2: Gauss-Newton (batch nonlinear optimizer)
 # 3: Dogleg (batch nonlinear optimizer)
 # NOTE: Not all options may be supported in every build.
-smootherType: 2
+smootherType: 0
