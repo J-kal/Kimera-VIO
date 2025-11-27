@@ -152,6 +152,13 @@ public:
       const gtsam::Vector3& velocity,
       const gtsam::imuBias::ConstantBias& bias);
 
+  fgo::integration::StateHandle bootstrapInitialState(
+      const Timestamp& timestamp,
+      FrameId frame_id,
+      const gtsam::Pose3& pose,
+      const gtsam::Vector3& velocity,
+      const gtsam::imuBias::ConstantBias& bias);
+
   bool addImuFactorBetween(const FrameId& previous_frame_id,
                            const FrameId& current_frame_id,
                            const ImuFrontend::PimPtr& pim);

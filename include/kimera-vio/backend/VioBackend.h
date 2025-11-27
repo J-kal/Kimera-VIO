@@ -140,6 +140,8 @@ class VioBackend {
   // Set initial state at given pose, velocity and bias.
   bool initStateAndSetPriors(
       const VioNavStateTimestamped& vio_nav_state_initial_seed);
+  bool initGraphTimeCentricStateAndSetPriors(
+      const VioNavStateTimestamped& vio_nav_state_initial_seed);
 
   void initializeBackend(const BackendInput& input) {
     CHECK(backend_state_ == BackendState::Bootstrap);

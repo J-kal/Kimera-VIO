@@ -293,6 +293,10 @@ void VioBackend::registerMapUpdateCallback(
 /* -------------------------------------------------------------------------- */
 bool VioBackend::initStateAndSetPriors(
     const VioNavStateTimestamped& vio_nav_state_initial_seed) {
+  if (backend_params_.use_graph_time_centric && graph_time_centric_adapter_) {
+    return initGraphTimeCentricStateAndSetPriors(
+        vio_nav_state_initial_seed);
+  }
   // Clean state
   new_values_.clear();
 
@@ -325,6 +329,49 @@ bool VioBackend::initStateAndSetPriors(
   return optimize(vio_nav_state_initial_seed.timestamp_,
                   curr_kf_id_,
                   backend_params_.numOptimize_);
+}
+
+bool VioBackend::initGraphTimeCentricStateAndSetPriors(
+    const VioNavStateTimestamped& vio_nav_state_initial_seed) {
+  CHECK(graph_time_centric_adapter_);
+  // Keep same state bookkeeping as the legacy flow.
+  new_values_.clear();
+  timestamp_lkf_ = vio_nav_state_initial_seed.timestamp_;
+  W_Pose_B_lkf_from_state_ = vio_nav_state_initial_seed.pose_;
+  W_Pose_B_lkf_from_increments_ = vio_nav_state_initial_seed.pose_;
+  W_Vel_B_lkf_ = vio_nav_state_initial_seed.velocity_;
+  imu_bias_lkf_ = vio_nav_state_initial_seed.imu_bias_;
+  imu_bias_prev_kf_ = vio_nav_state_initial_seed.imu_bias_;
+
+  VLOG(2) << "Initial state seed (GraphTimeCentric): \n"
+          << " - Initial timestamp: " << timestamp_lkf_ << '\n'
+          << " - Initial pose: " << W_Pose_B_lkf_from_state_ << '\n'
+          << " - Initial vel: " << W_Vel_B_lkf_.transpose() << '\n'
+          << " - Initial IMU bias: " << imu_bias_lkf_;
+
+  auto state_handle = graph_time_centric_adapter_->bootstrapInitialState(
+      vio_nav_state_initial_seed.timestamp_,
+      curr_kf_id_,
+      vio_nav_state_initial_seed.pose_,
+      vio_nav_state_initial_seed.velocity_,
+      vio_nav_state_initial_seed.imu_bias_);
+
+  if (!state_handle.valid) {
+    LOG(ERROR) << "GraphTimeCentric bootstrap: failed to add initial state.";
+    return false;
+  }
+
+  VLOG(2) << "GraphTimeCentric: initial keyframe state inserted, running "
+          << "bootstrap optimization.";
+
+  bool optimization_success = graph_time_centric_adapter_->optimizeGraph();
+  if (!optimization_success) {
+    LOG(ERROR) << "GraphTimeCentric bootstrap optimization failed.";
+    return false;
+  }
+
+  VLOG(2) << "GraphTimeCentric: bootstrap optimization succeeded.";
+  return true;
 }
 
 /* -------------------------------------------------------------------------- */

@@ -256,6 +256,45 @@ fgo::integration::StateHandle GraphTimeCentricBackendAdapter::addKeyframeState(
   return handle;
 }
 
+fgo::integration::StateHandle GraphTimeCentricBackendAdapter::bootstrapInitialState(
+    const Timestamp& timestamp,
+    FrameId frame_id,
+    const gtsam::Pose3& pose,
+    const gtsam::Vector3& velocity,
+    const gtsam::imuBias::ConstantBias& bias) {
+  fgo::integration::StateHandle handle;
+
+  if (!initialized_) {
+    LOG(ERROR) << "GraphTimeCentricBackendAdapter: not initialized, cannot bootstrap state";
+    return handle;
+  }
+
+  const double keyframe_timestamp_sec = timestampToSeconds(timestamp);
+  LOG(INFO) << "GraphTimeCentricBackendAdapter: bootstrapping initial state "
+            << "frame_id=" << frame_id << " at t=" << std::fixed
+            << std::setprecision(6) << keyframe_timestamp_sec;
+
+  try {
+    handle = integration_interface_->bootstrapInitialState(
+        keyframe_timestamp_sec, pose, velocity, bias);
+
+    if (handle.valid) {
+      state_timestamps_.push_back(keyframe_timestamp_sec);
+      num_states_ = std::max(num_states_, handle.index);
+      keyframe_state_handles_[frame_id] = handle;
+      LOG(INFO) << "GraphTimeCentricBackendAdapter: bootstrapped state index "
+                << handle.index << " at timestamp " << handle.timestamp;
+    } else {
+      LOG(ERROR) << "GraphTimeCentricBackendAdapter: failed to bootstrap initial state";
+    }
+  } catch (const std::exception& e) {
+    LOG(ERROR) << "GraphTimeCentricBackendAdapter: exception bootstrapping state: "
+               << e.what();
+  }
+
+  return handle;
+}
+
 bool GraphTimeCentricBackendAdapter::addImuFactorBetween(
     const FrameId& previous_frame_id,
     const FrameId& current_frame_id,
