@@ -31,10 +31,13 @@
 #include <functional>
 
 #include <gtsam/geometry/Pose3.h>
+#include <gtsam/geometry/StereoPoint2.h>
+#include <gtsam/geometry/Cal3_S2Stereo.h>
 #include <gtsam/navigation/NavState.h>
 #include <gtsam/navigation/ImuBias.h>
 #include <gtsam/nonlinear/Values.h>
 #include <gtsam/nonlinear/NonlinearFactorGraph.h>
+#include <gtsam_unstable/slam/SmartStereoProjectionPoseFactor.h>
 
 #include "kimera-vio/backend/VioBackend-definitions.h"
 #include "kimera-vio/backend/VioBackendParams.h"
@@ -162,6 +165,31 @@ public:
   bool addImuFactorBetween(const FrameId& previous_frame_id,
                            const FrameId& current_frame_id,
                            const ImuFrontend::PimPtr& pim);
+
+  // ========================================================================
+  // VISUAL FACTOR INTERFACE
+  // ========================================================================
+
+  /**
+   * @brief Set stereo camera calibration and smart factor params for visual factors
+   * @param stereo_cal Stereo camera calibration
+   * @param B_Pose_leftCam Body to left camera transformation
+   * @param smart_noise Pre-initialized smart factor noise model (from VioBackend)
+   * @param smart_params Pre-initialized smart factor params (from VioBackend)
+   */
+  void setStereoCalibration(const gtsam::Cal3_S2Stereo::shared_ptr& stereo_cal,
+                            const gtsam::Pose3& B_Pose_leftCam,
+                            const gtsam::SharedNoiseModel& smart_noise,
+                            const gtsam::SmartStereoProjectionParams& smart_params);
+
+  /**
+   * @brief Add stereo visual measurements for a keyframe
+   * @param frame_id Current keyframe ID
+   * @param stereo_measurements Vector of (landmark_id, stereo_point) pairs
+   * @return Number of landmarks processed
+   */
+  size_t addStereoMeasurements(FrameId frame_id,
+                               const StereoMeasurements& stereo_measurements);
 
 
   /**

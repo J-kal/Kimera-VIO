@@ -549,7 +549,6 @@ bool VioBackend::addVisualInertialStateAndOptimizeGraphTimeCentric(
     const ImuFrontend::PimPtr& pim,
     const std::optional<gtsam::Pose3>& body_lkf_OdomPose_body_kf,
     const std::optional<gtsam::Vector3>& body_kf_world_OdomVel_body_kf) {
-  static_cast<void>(status_smart_stereo_measurements_kf);
   static_cast<void>(body_lkf_OdomPose_body_kf);
   static_cast<void>(body_kf_world_OdomVel_body_kf);
 
@@ -559,6 +558,18 @@ bool VioBackend::addVisualInertialStateAndOptimizeGraphTimeCentric(
   CHECK(pim);
 
   VLOG(2) << "Using GraphTimeCentric adapter for keyframe processing";
+  
+  // Initialize stereo calibration and smart factor params on first call (only once)
+  // This ensures GraphTimeCentric uses the same parameters as standard VioBackend
+  static bool stereo_cal_initialized = false;
+  if (!stereo_cal_initialized && stereo_cal_) {
+    // Pass the pre-initialized smart factor params from VioBackend
+    // (initialized from BackendParams.yaml via setFactorsParams in constructor)
+    graph_time_centric_adapter_->setStereoCalibration(
+        stereo_cal_, B_Pose_leftCamRect_, smart_noise_, smart_factors_params_);
+    stereo_cal_initialized = true;
+    LOG(INFO) << "GraphTimeCentric: Stereo calibration and smart factor params initialized";
+  }
   
   last_kf_id_ = curr_kf_id_;
   ++curr_kf_id_;
@@ -589,6 +600,17 @@ bool VioBackend::addVisualInertialStateAndOptimizeGraphTimeCentric(
                  << last_kf_id_ << " and " << curr_kf_id_;
       return false;
     }
+  }
+
+  // Add visual measurements (SmartStereoFactors)
+  // This mirrors VioBackend::addLandmarksToGraph functionality
+  const StereoMeasurements& smart_stereo_measurements_kf =
+      status_smart_stereo_measurements_kf.second;
+  
+  if (!smart_stereo_measurements_kf.empty()) {
+    size_t n_visual = graph_time_centric_adapter_->addStereoMeasurements(
+        curr_kf_id_, smart_stereo_measurements_kf);
+    VLOG(2) << "GraphTimeCentric: Added " << n_visual << " visual measurements at keyframe " << curr_kf_id_;
   }
 
   // Trigger optimization

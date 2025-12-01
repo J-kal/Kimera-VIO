@@ -494,4 +494,50 @@ fgo::integration::KimeraIntegrationParams GraphTimeCentricBackendAdapter::create
   return params;
 }
 
+// ========================================================================
+// VISUAL FACTOR INTERFACE
+// ========================================================================
+
+void GraphTimeCentricBackendAdapter::setStereoCalibration(
+    const gtsam::Cal3_S2Stereo::shared_ptr& stereo_cal,
+    const gtsam::Pose3& B_Pose_leftCam,
+    const gtsam::SharedNoiseModel& smart_noise,
+    const gtsam::SmartStereoProjectionParams& smart_params) {
+  
+  if (!integration_interface_) {
+    LOG(ERROR) << "GraphTimeCentricBackendAdapter: Integration interface not initialized";
+    return;
+  }
+  
+  integration_interface_->setStereoCalibration(stereo_cal, B_Pose_leftCam, smart_noise, smart_params);
+  LOG(INFO) << "GraphTimeCentricBackendAdapter: Stereo calibration and smart factor params set";
+}
+
+size_t GraphTimeCentricBackendAdapter::addStereoMeasurements(
+    FrameId frame_id,
+    const StereoMeasurements& stereo_measurements) {
+  
+  if (!integration_interface_) {
+    LOG(ERROR) << "GraphTimeCentricBackendAdapter: Integration interface not initialized";
+    return 0;
+  }
+  
+  // Convert VIO StereoMeasurements to integration interface format
+  std::vector<fgo::integration::KimeraIntegrationInterface::StereoMeasurement> interface_measurements;
+  interface_measurements.reserve(stereo_measurements.size());
+  
+  for (const auto& meas : stereo_measurements) {
+    // meas is a pair<LandmarkId, StereoPoint2>
+    interface_measurements.push_back(meas);
+  }
+  
+  size_t n_added = integration_interface_->addStereoMeasurements(
+      static_cast<fgo::integration::KimeraIntegrationInterface::FrameId>(frame_id),
+      interface_measurements);
+  
+  VLOG(2) << "GraphTimeCentricBackendAdapter: Added " << n_added << " stereo measurements at frame " << frame_id;
+  
+  return n_added;
+}
+
 } // namespace VIO
