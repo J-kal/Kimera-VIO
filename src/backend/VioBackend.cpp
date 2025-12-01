@@ -580,7 +580,10 @@ bool VioBackend::addVisualInertialStateAndOptimizeGraphTimeCentric(
     return false;
   }
 
-  if (last_kf_id_ != 0) {
+  // Add IMU factor between previous keyframe and current keyframe
+  // Condition: last_kf_id_ >= 0 means we have a valid previous keyframe (bootstrap sets it to 0)
+  // Note: last_kf_id_ starts at -1, so this correctly skips IMU factor only before bootstrap
+  if (last_kf_id_ >= 0) {
     if (!graph_time_centric_adapter_->addImuFactorBetween(last_kf_id_, curr_kf_id_, pim)) {
       LOG(ERROR) << "GraphTimeCentric: failed to add IMU factor between "
                  << last_kf_id_ << " and " << curr_kf_id_;

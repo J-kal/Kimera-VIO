@@ -462,12 +462,23 @@ fgo::integration::KimeraIntegrationParams GraphTimeCentricBackendAdapter::create
   params.optimize_on_keyframe = true;
   params.smoother_lag = 5.0;
   
-  params.imu_rate = 200.0;
+  // IMU parameters (from ImuParams.yaml, passed through via imu_params_)
+  // This ensures GraphTimeCentric uses identical IMU factor construction as VioBackend
+  params.imu_rate = imu_params_.nominal_sampling_time_s_ > 0 
+      ? 1.0 / imu_params_.nominal_sampling_time_s_ 
+      : 200.0;  // Default 200Hz if not specified
   params.accel_noise_sigma = imu_params_.acc_noise_density_;
   params.gyro_noise_sigma = imu_params_.gyro_noise_density_;
   params.accel_bias_rw_sigma = imu_params_.acc_random_walk_;
   params.gyro_bias_rw_sigma = imu_params_.gyro_random_walk_;
   params.gravity = imu_params_.n_gravity_.norm() > 0 ? imu_params_.n_gravity_ : Eigen::Vector3d(0.0, 0.0, -9.81);
+  
+  // IMU preintegration type (from ImuParams.yaml imu_preintegration_type)
+  // This is the key parameter that determines CombinedImuFactor vs ImuFactor+BiasFactor
+  params.imu_preintegration_type = static_cast<int>(imu_params_.imu_preintegration_type_);
+  
+  LOG(INFO) << "GraphTimeCentricBackendAdapter: IMU preintegration type = " 
+            << params.imu_preintegration_type << " (0=Combined, 1=Regular+BiasFactor)";
   
   if (params.use_gp_priors) {
     params.gp_type = "WNOJ";
@@ -477,7 +488,8 @@ fgo::integration::KimeraIntegrationParams GraphTimeCentricBackendAdapter::create
   
   LOG(INFO) << "Created integration params: use_isam2=" << params.use_isam2
             << ", use_gp=" << params.use_gp_priors
-            << ", smoother_lag=" << params.smoother_lag;
+            << ", smoother_lag=" << params.smoother_lag
+            << ", imu_rate=" << params.imu_rate;
   
   return params;
 }
