@@ -188,6 +188,8 @@ class BackendParams : public PipelineParams {
   // Enable comprehensive factor graph logging when optimization fails
   // Outputs factor keys, .g2o files, and .dot graph visualizations
   bool enable_factor_graph_debug_logging_ = true;
+  std::string factor_graph_debug_save_dir_ = "debug_run_logs";  // Directory for saved files
+  int factor_graph_debug_save_interval_ = 1;  // Save after every N optimizations (1 = every time)
   int smootherType_ = 2;  // 0: ISAM2, 1: FixedLagSmoother, 2: Hybrid
 };
 

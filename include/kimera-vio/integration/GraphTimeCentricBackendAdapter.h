@@ -331,6 +331,7 @@ private:
   double last_imu_timestamp_sec_;
   std::vector<double> state_timestamps_;
   std::unordered_map<FrameId, fgo::integration::StateHandle> keyframe_state_handles_;
+  int optimization_iteration_;  // Counter for factor graph debug logging
   
   // Buffering
   struct BufferedState {

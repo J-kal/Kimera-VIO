@@ -34,9 +34,12 @@
 
 #include <limits>  // for numeric_limits<>
 #include <map>
+#include <sstream>  // for std::ostringstream
 #include <string>
 #include <utility>  // for make_pair
 #include <vector>
+#include <sys/stat.h>   // for mkdir, stat, S_ISDIR
+#include <sys/types.h>  // for stat
 
 #include "kimera-vio/common/VioNavState.h"
 #include "kimera-vio/imu-frontend/ImuFrontend-definitions.h"
@@ -1505,6 +1508,17 @@ bool VioBackend::optimize(
 
       // Debug.
       postDebug(total_start_time, start_time);
+      
+      // Save factor graph after successful optimization (if enabled)
+      if (backend_params_.enable_factor_graph_debug_logging_) {
+        optimization_iteration_++;
+        int save_interval = backend_params_.factor_graph_debug_save_interval_;
+        bool should_save = (save_interval > 0) && (optimization_iteration_ % save_interval == 0);
+        
+        if (should_save) {
+          saveFactorGraphAfterOptimization(optimization_iteration_);
+        }
+      }
     } else {
       LOG(ERROR) << "Smoother is not ok! Not updating Backend state.";
     }
@@ -2732,12 +2746,50 @@ void VioBackend::printFactorKeys(const gtsam::NonlinearFactorGraph& graph,
   LOG(INFO) << "========== End " << label << " ==========";
 }
 
+// Helper function to create directory recursively
+static bool createDirectoryRecursive(const std::string& path) {
+  if (path.empty()) {
+    return false;
+  }
+  
+  // Check if directory already exists
+  struct stat info;
+  if (stat(path.c_str(), &info) == 0 && S_ISDIR(info.st_mode)) {
+    return true;  // Directory already exists
+  }
+  
+  // Try to create the directory
+  if (mkdir(path.c_str(), 0755) == 0) {
+    return true;  // Successfully created
+  }
+  
+  // If mkdir failed, try creating parent directories first
+  size_t last_slash = path.find_last_of('/');
+  if (last_slash != std::string::npos && last_slash > 0) {
+    std::string parent = path.substr(0, last_slash);
+    if (createDirectoryRecursive(parent)) {
+      // Parent created, try again
+      return mkdir(path.c_str(), 0755) == 0;
+    }
+  }
+  
+  return false;
+}
+
 bool VioBackend::saveFactorGraphAsG2o(const gtsam::NonlinearFactorGraph& graph,
                                      const gtsam::Values& values,
                                      const std::string& filename) const {
   try {
-    // Construct full path in debug_run_logs directory
-    std::string full_path = "/workspaces/src/debug_run_logs/" + filename + ".g2o";
+    // Use configurable directory from backend_params_
+    std::string save_dir = backend_params_.factor_graph_debug_save_dir_;
+    
+    // Create directory recursively if needed
+    if (!createDirectoryRecursive(save_dir)) {
+      LOG(WARNING) << "VioBackend: Failed to create directory: " << save_dir;
+      // Continue anyway - maybe directory already exists
+    }
+    
+    std::string full_path = save_dir + "/" + filename + ".g2o";
     
     // Use GTSAM's built-in writeG2o function
     gtsam::writeG2o(graph, values, full_path);
@@ -2754,8 +2806,16 @@ bool VioBackend::saveFactorGraphAsDot(const gtsam::NonlinearFactorGraph& graph,
                                      const gtsam::Values& values,
                                      const std::string& filename) const {
   try {
-    // Construct full path in debug_run_logs directory
-    std::string full_path = "/workspaces/src/debug_run_logs/" + filename + ".dot";
+    // Use configurable directory from backend_params_
+    std::string save_dir = backend_params_.factor_graph_debug_save_dir_;
+    
+    // Create directory recursively if needed
+    if (!createDirectoryRecursive(save_dir)) {
+      LOG(WARNING) << "VioBackend: Failed to create directory: " << save_dir;
+      // Continue anyway - maybe directory already exists
+    }
+    
+    std::string full_path = save_dir + "/" + filename + ".dot";
     
     std::ofstream dot_file(full_path);
     if (!dot_file.is_open()) {
@@ -2844,6 +2904,31 @@ void VioBackend::logFactorGraphDebugInfo(const gtsam::NonlinearFactorGraph& grap
   LOG(INFO) << "  - Graph error: " << graph.error(values);
   
   LOG(WARNING) << "========================================";
+}
+
+void VioBackend::saveFactorGraphAfterOptimization(int iteration) {
+  if (!backend_params_.enable_factor_graph_debug_logging_) {
+    return;  // Debug logging disabled
+  }
+  
+  // Get current factor graph and values from smoother
+  gtsam::NonlinearFactorGraph current_graph = smoother_->getFactors();
+  gtsam::Values current_values = smoother_->calculateEstimate();
+  
+  // Generate filename with iteration number
+  std::ostringstream filename_ss;
+  filename_ss << "factor_graph_after_optimization_iter" << iteration;
+  std::string base_filename = filename_ss.str();
+  
+  // Save .g2o file
+  if (saveFactorGraphAsG2o(current_graph, current_values, base_filename)) {
+    LOG(INFO) << "VioBackend: Saved factor graph .g2o file (iteration " << iteration << ")";
+  }
+  
+  // Save .dot file
+  if (saveFactorGraphAsDot(current_graph, current_values, base_filename)) {
+    LOG(INFO) << "VioBackend: Saved factor graph .dot file (iteration " << iteration << ")";
+  }
 }
 
 }  // namespace VIO.

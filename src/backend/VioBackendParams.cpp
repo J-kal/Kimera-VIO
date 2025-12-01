@@ -174,6 +174,8 @@ bool BackendParams::parseYAMLVioBackendParams(const YamlParser& yaml_parser) {
   yaml_parser.getYamlParam("use_graph_time_centric", &use_graph_time_centric);
   yaml_parser.getYamlParam("smootherType", &smootherType_);
   yaml_parser.getYamlParam("enable_factor_graph_debug_logging", &enable_factor_graph_debug_logging_);
+  yaml_parser.getYamlParam("factor_graph_debug_save_dir", &factor_graph_debug_save_dir_);
+  yaml_parser.getYamlParam("factor_graph_debug_save_interval", &factor_graph_debug_save_interval_);
   
   // GP motion priors (GraphTimeCentric only) - read from kimera namespace
   yaml_parser.getNestedYamlParam("kimera", "add_gp_motion_priors", &add_gp_motion_priors);
@@ -233,7 +235,9 @@ bool BackendParams::equalsVioBackendParams(const BackendParams& vp2,
             vp2.mono_translation_scale_factor_)) &&
       (use_graph_time_centric == vp2.use_graph_time_centric) &&
       (smootherType_ == vp2.smootherType_) &&
-      (enable_factor_graph_debug_logging_ == vp2.enable_factor_graph_debug_logging_);
+      (enable_factor_graph_debug_logging_ == vp2.enable_factor_graph_debug_logging_) &&
+      (factor_graph_debug_save_dir_ == vp2.factor_graph_debug_save_dir_) &&
+      (factor_graph_debug_save_interval_ == vp2.factor_graph_debug_save_interval_);
 }
 
 void BackendParams::printVioBackendParams() const {
@@ -312,7 +316,11 @@ void BackendParams::printVioBackendParams() const {
       "Smoother Type",
       smootherType_,
       "Enable Factor Graph Debug Logging",
-      enable_factor_graph_debug_logging_);
+      enable_factor_graph_debug_logging_,
+      "Factor Graph Debug Save Dir",
+      factor_graph_debug_save_dir_,
+      "Factor Graph Debug Save Interval",
+      factor_graph_debug_save_interval_);
   LOG(INFO) << out.str();
   LOG(INFO) << "** Backend Iinitialization Parameters **\n"
             << "initial_ground_truth_state_: ";

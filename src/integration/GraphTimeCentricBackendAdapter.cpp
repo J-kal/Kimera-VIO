@@ -108,7 +108,8 @@ GraphTimeCentricBackendAdapter::GraphTimeCentricBackendAdapter(
     , initialized_(false)
     , num_states_(0)
     , last_optimization_time_(0.0)
-    , last_imu_timestamp_sec_(0.0) {
+    , last_imu_timestamp_sec_(0.0)
+    , optimization_iteration_(0) {
   LOG(INFO) << "GraphTimeCentricBackendAdapter: created";
   std::cout << "[Kimera-VIO] GraphTimeCentricBackendAdapter: ENABLED IMPLEMENTATION ACTIVE" << std::endl;
 }
@@ -444,6 +445,31 @@ bool GraphTimeCentricBackendAdapter::optimizeGraph() {
   }
 
   LOG(INFO) << "GraphTimeCentricBackendAdapter: optimization via backend smoother succeeded";
+  
+  // Save factor graph debug info after each successful optimization (if enabled and interval matches)
+  if (backend_params_.enable_factor_graph_debug_logging_) {
+    optimization_iteration_++;
+    
+    // Only save if interval is > 0 and iteration matches interval
+    int save_interval = backend_params_.factor_graph_debug_save_interval_;
+    bool should_save = (save_interval > 0) && (optimization_iteration_ % save_interval == 0);
+    
+    if (should_save) {
+      if (integration_interface_->saveFactorGraphDebugInfo(
+              optimization_iteration_, 
+              "after_optimization",
+              backend_params_.factor_graph_debug_save_dir_)) {
+        LOG(INFO) << "GraphTimeCentricBackendAdapter: Saved factor graph debug info (iteration " 
+                  << optimization_iteration_ << ", interval=" << save_interval << ")";
+      } else {
+        LOG(WARNING) << "GraphTimeCentricBackendAdapter: Failed to save factor graph debug info";
+      }
+    } else {
+      VLOG(2) << "GraphTimeCentricBackendAdapter: Skipping factor graph save (iteration " 
+              << optimization_iteration_ << ", interval=" << save_interval << ")";
+    }
+  }
+  
   return true;
 }
 

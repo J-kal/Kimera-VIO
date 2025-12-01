@@ -460,6 +460,9 @@ class VioBackend {
   void logFactorGraphDebugInfo(const gtsam::NonlinearFactorGraph& graph,
                               const gtsam::Values& values,
                               const std::string& context_label = "optimization_failure") const;
+  
+  // Save factor graph after successful optimization (for regular VioBackend)
+  void saveFactorGraphAfterOptimization(int iteration);
 
  public:
   /// Getters
@@ -584,6 +587,9 @@ class VioBackend {
 
   //! Number of Cheirality exceptions
   size_t counter_of_exceptions_ = 0;
+  
+  //! Optimization iteration counter (for factor graph debug logging)
+  int optimization_iteration_ = 0;
 
   //! Logger.
   const bool log_output_ = {false};

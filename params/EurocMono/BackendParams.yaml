@@ -95,7 +95,7 @@ pose_guess_source: 0
 mono_translation_scale_factor: 0.1
 
 # GRAPH TIME CENTRIC ADAPTER ################################################
-use_graph_time_centric: 1
+use_graph_time_centric: 0
 
 # Kimera-specific parameters for GraphTimeCentric (novel features not in standard VioBackend)
 kimera:
@@ -105,7 +105,7 @@ kimera:
   # Adds smoothness constraints on trajectory using Gaussian Process priors
   # Requires omega (angular velocity) from gyroscope measurements
   # 0 = disabled, 1 = enabled
-  add_gp_motion_priors: 1
+  add_gp_motion_priors: 0
   
   # GP Model Type - all non-Full types can be combined without interference!
   # 0 = WNOA (White Noise on Acceleration) - simplest, uses omega only
@@ -154,8 +154,18 @@ kimera:
 # FACTOR GRAPH DEBUG LOGGING #################################################
 # Enable comprehensive factor graph logging when optimization fails
 # Includes: factor keys, .g2o files, .dot graph visualizations
-# Output is logged to Rerun and saved to debug_run_logs/
+# Output is logged to Rerun and saved to the directory specified below
 enable_factor_graph_debug_logging: 1
+
+# Directory where factor graph debug files are saved
+# Relative to workspace root or absolute path
+factor_graph_debug_save_dir: "/workspaces/src/debug_factor_graph_logs"
+
+# Save factor graph after every N optimizations
+# Set to 1 to save after every optimization
+# Set to 10 to save every 10th optimization (reduces file count)
+# Set to 0 to disable saving (only logs to console)
+factor_graph_debug_save_interval: 10
 
 # smootherType - select which backend smoother to use:
 # 0: ISAM2 (incremental nonlinear smoother, default)
