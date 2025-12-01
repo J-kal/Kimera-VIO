@@ -128,6 +128,41 @@ VioBackend::VioBackend(const gtsam::Pose3& B_Pose_leftCamRect,
                    &zero_velocity_prior_noise_,
                    &constant_velocity_prior_noise_);
 
+  // Initialize GP motion prior parameters (GraphTimeCentric only)
+  // This follows the same pattern as smart_noise_ - created here, passed to adapter at runtime
+  if (backend_params.add_gp_motion_priors) {
+    // Qc noise model (used by all GP prior types)
+    gtsam::Vector6 qc_variances;
+    qc_variances << backend_params.qc_gp_trans_var, backend_params.qc_gp_trans_var, 
+                    backend_params.qc_gp_trans_var, backend_params.qc_gp_rot_var,
+                    backend_params.qc_gp_rot_var, backend_params.qc_gp_rot_var;
+    gp_qc_model_ = gtsam::noiseModel::Diagonal::Variances(qc_variances);
+    
+    // Singer model ad matrix (acceleration damping)
+    // Diagonal matrix: [ad_trans, ad_trans, ad_trans, ad_rot, ad_rot, ad_rot]
+    gp_ad_matrix_ = gtsam::Matrix6::Zero();
+    gp_ad_matrix_(0, 0) = backend_params.ad_trans;
+    gp_ad_matrix_(1, 1) = backend_params.ad_trans;
+    gp_ad_matrix_(2, 2) = backend_params.ad_trans;
+    gp_ad_matrix_(3, 3) = backend_params.ad_rot;
+    gp_ad_matrix_(4, 4) = backend_params.ad_rot;
+    gp_ad_matrix_(5, 5) = backend_params.ad_rot;
+    
+    // Initial acceleration state prior (for future Full variants)
+    gtsam::Vector6 acc_sigmas;
+    acc_sigmas << backend_params.initial_acc_sigma_trans, backend_params.initial_acc_sigma_trans,
+                  backend_params.initial_acc_sigma_trans, backend_params.initial_acc_sigma_rot,
+                  backend_params.initial_acc_sigma_rot, backend_params.initial_acc_sigma_rot;
+    gp_acc_prior_noise_ = gtsam::noiseModel::Diagonal::Sigmas(acc_sigmas);
+    
+    LOG(INFO) << "VioBackend: GP motion prior params initialized - "
+              << "qc_trans=" << backend_params.qc_gp_trans_var
+              << ", qc_rot=" << backend_params.qc_gp_rot_var
+              << ", ad_trans=" << backend_params.ad_trans
+              << ", ad_rot=" << backend_params.ad_rot
+              << ", gp_model_type=" << backend_params.gp_model_type;
+  }
+
   // Reset debug info.
   resetDebugInfo(&debug_info_);
 
@@ -522,6 +557,7 @@ bool VioBackend::addVisualInertialStateAndOptimize(const BackendInput& input) {
         input.timestamp_,
         *input.status_stereo_measurements_kf_,
         input.pim_,
+        input.imu_acc_gyrs_,  // Pass raw IMU data for omega extraction
         input.body_lkf_OdomPose_body_kf_,
         input.body_kf_world_OdomVel_body_kf_);
         timestamp_lkf_ = input.timestamp_;
@@ -547,6 +583,7 @@ bool VioBackend::addVisualInertialStateAndOptimizeGraphTimeCentric(
     const Timestamp& timestamp,
     const StatusStereoMeasurements& status_smart_stereo_measurements_kf,
     const ImuFrontend::PimPtr& pim,
+    const ImuAccGyrS& imu_acc_gyrs,
     const std::optional<gtsam::Pose3>& body_lkf_OdomPose_body_kf,
     const std::optional<gtsam::Vector3>& body_kf_world_OdomVel_body_kf) {
   static_cast<void>(body_lkf_OdomPose_body_kf);
@@ -569,6 +606,15 @@ bool VioBackend::addVisualInertialStateAndOptimizeGraphTimeCentric(
         stereo_cal_, B_Pose_leftCamRect_, smart_noise_, smart_factors_params_);
     stereo_cal_initialized = true;
     LOG(INFO) << "GraphTimeCentric: Stereo calibration and smart factor params initialized";
+  }
+  
+  // Initialize GP motion prior params on first call (only once)
+  // This follows the same pattern as stereo calibration
+  static bool gp_priors_initialized = false;
+  if (!gp_priors_initialized && backend_params_.add_gp_motion_priors && gp_qc_model_) {
+    graph_time_centric_adapter_->setGPPriorParams(gp_qc_model_, gp_ad_matrix_, gp_acc_prior_noise_);
+    gp_priors_initialized = true;
+    LOG(INFO) << "GraphTimeCentric: GP motion prior params initialized (Qc, ad, acc_prior)";
   }
   
   last_kf_id_ = curr_kf_id_;
@@ -595,10 +641,42 @@ bool VioBackend::addVisualInertialStateAndOptimizeGraphTimeCentric(
   // Condition: last_kf_id_ >= 0 means we have a valid previous keyframe (bootstrap sets it to 0)
   // Note: last_kf_id_ starts at -1, so this correctly skips IMU factor only before bootstrap
   if (last_kf_id_ >= 0) {
-    if (!graph_time_centric_adapter_->addImuFactorBetween(last_kf_id_, curr_kf_id_, pim)) {
-      LOG(ERROR) << "GraphTimeCentric: failed to add IMU factor between "
-                 << last_kf_id_ << " and " << curr_kf_id_;
-      return false;
+    // For full GP motion priors, we need omega (angular velocity) from the raw IMU data
+    // Use OmegaAtState struct for clean encapsulation (contains omega AND acceleration for WNOJ)
+    if (backend_params_.add_gp_motion_priors && imu_acc_gyrs.cols() > 0) {
+      // Compute OmegaAtState at keyframe boundaries using factory methods
+      // First measurement (at last keyframe) and last measurement (at current keyframe)
+      // Note: OmegaAtState is defined in online_fgo_core/integration/KimeraIntegrationInterface.h
+      // Using fromImuAccGyrFull to include acceleration data for WNOJ/Singer GP priors
+      fgo::integration::OmegaAtState omega_from = fgo::integration::OmegaAtState::fromImuAccGyrFull(
+          imu_acc_gyrs.col(0),              // First IMU measurement in interval [acc(3), gyro(3)]
+          imu_bias_lkf_,                    // Full IMU bias (accelerometer + gyroscope)
+          timestamp_lkf_);                  // Timestamp of last keyframe
+      
+      fgo::integration::OmegaAtState omega_to = fgo::integration::OmegaAtState::fromImuAccGyrFull(
+          imu_acc_gyrs.col(imu_acc_gyrs.cols() - 1),  // Last IMU measurement in interval
+          imu_bias_lkf_,                              // Full IMU bias
+          timestamp);                                  // Timestamp of current keyframe
+      
+      VLOG(2) << "GraphTimeCentric: Adding IMU factor with OmegaAtState - "
+              << "omega_from=[" << omega_from.omega.transpose() << "], "
+              << "omega_to=[" << omega_to.omega.transpose() << "], "
+              << "acc_from=[" << omega_from.acc.transpose() << "], "
+              << "acc_to=[" << omega_to.acc.transpose() << "]";
+      
+      if (!graph_time_centric_adapter_->addImuFactorWithOmega(
+              last_kf_id_, curr_kf_id_, *pim, omega_from, omega_to)) {
+        LOG(ERROR) << "GraphTimeCentric: failed to add IMU factor with omega between "
+                   << last_kf_id_ << " and " << curr_kf_id_;
+        return false;
+      }
+    } else {
+      // Standard IMU factor without omega (uses simpler motion model)
+      if (!graph_time_centric_adapter_->addImuFactorBetween(last_kf_id_, curr_kf_id_, pim)) {
+        LOG(ERROR) << "GraphTimeCentric: failed to add IMU factor between "
+                   << last_kf_id_ << " and " << curr_kf_id_;
+        return false;
+      }
     }
   }
 

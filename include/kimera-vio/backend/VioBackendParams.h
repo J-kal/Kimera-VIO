@@ -154,6 +154,36 @@ class BackendParams : public PipelineParams {
   // Runtime toggle to use Graph Time Centric backend adapter
   bool use_graph_time_centric = true;
   
+  // Add GP motion priors between consecutive keyframe states (GraphTimeCentric only)
+  // Supports multiple GP model types (see gp_model_type)
+  bool add_gp_motion_priors = false;
+  
+  // GP model type - all non-Full types can be combined without interference!
+  // 0 = WNOA: White Noise on Acceleration (simplest, uses omega only)
+  // 1 = WNOJ: White Noise on Jerk (uses omega + acceleration measurements)
+  // 2 = WNOJFull: WNOJ with acceleration as optimized state (not implemented)
+  // 3 = Singer: Exponentially decaying acceleration model
+  // 4 = SingerFull: Singer with acceleration as optimized state (not implemented)
+  // 5 = WNOA+WNOJ: Both WNOA and WNOJ simultaneously
+  // 6 = WNOA+Singer: WNOA plus Singer decay model
+  // 7 = WNOA+WNOJ+Singer: All three - maximum smoothing
+  int gp_model_type = 0;  // Default: WNOA
+  
+  // Qc variance for GP priors (process noise / trajectory smoothness)
+  // Lower values = smoother trajectory, higher values = more flexibility
+  double qc_gp_trans_var = 1.0;   // Translation variance (m^2/s^4)
+  double qc_gp_rot_var = 0.1;     // Rotation variance (rad^2/s^4)
+  
+  // Singer model acceleration damping (ad matrix diagonal)
+  // Controls exponential decay: da/dt = -ad * a + noise
+  // Higher = faster decay to zero acceleration
+  double ad_trans = 1.0;          // Translation damping (1/s)
+  double ad_rot = 2.0;            // Rotation damping (1/s)
+  
+  // Full variant parameters (for future WNOJFull/SingerFull)
+  double initial_acc_sigma_trans = 0.5;   // m/s^2
+  double initial_acc_sigma_rot = 0.1;     // rad/s^2
+  
   //! Debug params
   // Enable comprehensive factor graph logging when optimization fails
   // Outputs factor keys, .g2o files, and .dot graph visualizations

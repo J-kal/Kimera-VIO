@@ -96,8 +96,60 @@ mono_translation_scale_factor: 0.1
 
 # GRAPH TIME CENTRIC ADAPTER ################################################
 use_graph_time_centric: 1
+
+# Kimera-specific parameters for GraphTimeCentric (novel features not in standard VioBackend)
 kimera:
-  add_gp_motion_priors: 0
+  # ============================================================================
+  # GP MOTION PRIORS
+  # ============================================================================
+  # Adds smoothness constraints on trajectory using Gaussian Process priors
+  # Requires omega (angular velocity) from gyroscope measurements
+  # 0 = disabled, 1 = enabled
+  add_gp_motion_priors: 1
+  
+  # GP Model Type - all non-Full types can be combined without interference!
+  # 0 = WNOA (White Noise on Acceleration) - simplest, uses omega only
+  # 1 = WNOJ (White Noise on Jerk) - uses omega + acceleration measurements
+  # 2 = WNOJFull - WNOJ with acceleration as optimized state (not implemented)
+  # 3 = Singer - exponentially decaying acceleration model
+  # 4 = SingerFull - Singer with acceleration as optimized state (not implemented)
+  # 5 = WNOA+WNOJ - Both WNOA and WNOJ simultaneously
+  # 6 = WNOA+Singer - WNOA plus Singer decay model
+  # 7 = WNOA+WNOJ+Singer - All three models (maximum smoothing)
+  #
+  # Why combinations work:
+  # - WNOA constrains acceleration to be white noise
+  # - WNOJ constrains jerk (acceleration derivative) to be white noise
+  # - Singer adds exponential decay constraint on acceleration
+  # These are ADDITIVE regularization terms - they don't conflict!
+  gp_model_type: 7
+  
+  # --------------------------------------------------------------------------
+  # Qc Noise Model (used by all GP prior types)
+  # --------------------------------------------------------------------------
+  # Controls process noise / trajectory smoothness
+  # Lower values = smoother trajectory, higher values = more flexibility
+  qc_gp_trans_var: 1.0   # Translation variance (m^2/s^4) - for x, y, z
+  qc_gp_rot_var: 0.1     # Rotation variance (rad^2/s^4) - for roll, pitch, yaw
+  
+  # --------------------------------------------------------------------------
+  # Singer Model Parameters (used by types 3, 4, 6, 7)
+  # --------------------------------------------------------------------------
+  # Acceleration damping matrix (ad) - diagonal values
+  # Controls how quickly acceleration decays toward zero: da/dt = -ad * a + noise
+  # Higher values = faster decay (more aggressive return to zero acceleration)
+  # Lower values = slower decay (more persistent acceleration allowed)
+  # Units: 1/s (inverse time constant)
+  ad_trans: 1.0          # Translation damping (x, y, z axes)
+  ad_rot: 2.0            # Rotation damping (roll, pitch, yaw axes)
+  
+  # --------------------------------------------------------------------------
+  # Full Variant Parameters (for future WNOJFull/SingerFull implementation)
+  # --------------------------------------------------------------------------
+  # These add acceleration as an optimized state variable (A keys)
+  # Initial sigma for acceleration state priors
+  initial_acc_sigma_trans: 0.5   # Translation acceleration sigma (m/s^2)
+  initial_acc_sigma_rot: 0.1     # Rotation acceleration sigma (rad/s^2)
 
 # FACTOR GRAPH DEBUG LOGGING #################################################
 # Enable comprehensive factor graph logging when optimization fails

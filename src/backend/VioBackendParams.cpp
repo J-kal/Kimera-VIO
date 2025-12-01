@@ -174,6 +174,18 @@ bool BackendParams::parseYAMLVioBackendParams(const YamlParser& yaml_parser) {
   yaml_parser.getYamlParam("use_graph_time_centric", &use_graph_time_centric);
   yaml_parser.getYamlParam("smootherType", &smootherType_);
   yaml_parser.getYamlParam("enable_factor_graph_debug_logging", &enable_factor_graph_debug_logging_);
+  
+  // GP motion priors (GraphTimeCentric only) - read from kimera namespace
+  yaml_parser.getNestedYamlParam("kimera", "add_gp_motion_priors", &add_gp_motion_priors);
+  yaml_parser.getNestedYamlParam("kimera", "gp_model_type", &gp_model_type);
+  yaml_parser.getNestedYamlParam("kimera", "qc_gp_trans_var", &qc_gp_trans_var);
+  yaml_parser.getNestedYamlParam("kimera", "qc_gp_rot_var", &qc_gp_rot_var);
+  // Singer model parameters
+  yaml_parser.getNestedYamlParam("kimera", "ad_trans", &ad_trans);
+  yaml_parser.getNestedYamlParam("kimera", "ad_rot", &ad_rot);
+  // Full variant parameters
+  yaml_parser.getNestedYamlParam("kimera", "initial_acc_sigma_trans", &initial_acc_sigma_trans);
+  yaml_parser.getNestedYamlParam("kimera", "initial_acc_sigma_rot", &initial_acc_sigma_rot);
 
   return true;
 }

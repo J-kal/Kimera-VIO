@@ -46,6 +46,9 @@
 
 namespace VIO {
 
+// Import OmegaAtState from online_fgo_core for use in this adapter
+using fgo::integration::OmegaAtState;
+
 /**
  * @brief Adapter that allows Kimera VioBackend to use online_fgo_core's GraphTimeCentric
  * 
@@ -181,6 +184,37 @@ public:
                             const gtsam::Pose3& B_Pose_leftCam,
                             const gtsam::SharedNoiseModel& smart_noise,
                             const gtsam::SmartStereoProjectionParams& smart_params);
+  
+  /**
+   * @brief Set GP motion prior parameters
+   * @param gp_qc_model Pre-initialized Qc noise model for GP priors (from VioBackend)
+   * @param gp_ad_matrix Singer model acceleration damping matrix
+   * @param gp_acc_prior_noise Prior noise for acceleration state (Full variants)
+   * 
+   * This follows the same pattern as setStereoCalibration - VioBackend creates
+   * all parameters and passes them pre-initialized to ensure consistency.
+   */
+  void setGPPriorParams(const gtsam::SharedNoiseModel& gp_qc_model,
+                        const gtsam::Matrix6& gp_ad_matrix,
+                        const gtsam::SharedNoiseModel& gp_acc_prior_noise);
+  
+  /**
+   * @brief Add IMU factor with omega (angular velocity) for full GP priors
+   * @param from_id Previous keyframe ID
+   * @param to_id Current keyframe ID  
+   * @param pim Preintegrated IMU measurements
+   * @param omega_from OmegaAtState at the from_id state (contains bias-corrected omega)
+   * @param omega_to OmegaAtState at the to_id state (contains bias-corrected omega)
+   * @return True if successful
+   * 
+   * OmegaAtState encapsulates bias-corrected angular velocity computed from
+   * gyroscope measurements: omega = gyro_meas - gyro_bias
+   */
+  bool addImuFactorWithOmega(FrameId from_id, 
+                             FrameId to_id,
+                             const gtsam::PreintegrationType& pim,
+                             const OmegaAtState& omega_from,
+                             const OmegaAtState& omega_to);
 
   /**
    * @brief Add stereo visual measurements for a keyframe

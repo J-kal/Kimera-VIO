@@ -306,6 +306,7 @@ class VioBackend {
       const Timestamp& timestamp_kf_nsec,
       const StatusStereoMeasurements& status_smart_stereo_measurements_kf,
       const ImuFrontend::PimPtr& pim,
+      const ImuAccGyrS& imu_acc_gyrs,  // Raw IMU data for omega extraction
       const std::optional<gtsam::Pose3>& body_lkf_OdomPose_body_kf,
       const std::optional<gtsam::Vector3>& body_kf_world_OdomVel_body_kf);
 
@@ -514,6 +515,15 @@ class VioBackend {
   // Vision params.
   gtsam::SmartStereoProjectionParams smart_factors_params_;
   gtsam::SharedNoiseModel smart_noise_;
+  
+  // GP motion prior params (GraphTimeCentric only)
+  // Qc noise model for GPWNOAPrior - initialized from BackendParams
+  gtsam::SharedNoiseModel gp_qc_model_;
+  // Singer model acceleration damping matrix (ad)
+  gtsam::Matrix6 gp_ad_matrix_;
+  // Initial acceleration state sigma (for future Full variants)
+  gtsam::SharedNoiseModel gp_acc_prior_noise_;
+  
   // Pose of the left camera wrt body
   const Pose3 B_Pose_leftCamRect_;
   // Stores calibration, baseline.

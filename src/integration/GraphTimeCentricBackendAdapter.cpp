@@ -334,6 +334,47 @@ bool GraphTimeCentricBackendAdapter::addImuFactorBetween(
   return true;
 }
 
+bool GraphTimeCentricBackendAdapter::addImuFactorWithOmega(
+    FrameId from_id,
+    FrameId to_id,
+    const gtsam::PreintegrationType& pim,
+    const OmegaAtState& omega_from,
+    const OmegaAtState& omega_to) {
+  
+  if (!initialized_) {
+    LOG(ERROR) << "GraphTimeCentricBackendAdapter: not initialized";
+    return false;
+  }
+  
+  // Get state handles for both frames
+  auto prev_it = keyframe_state_handles_.find(from_id);
+  auto curr_it = keyframe_state_handles_.find(to_id);
+  
+  if (prev_it == keyframe_state_handles_.end() ||
+      curr_it == keyframe_state_handles_.end()) {
+    LOG(WARNING) << "GraphTimeCentricBackendAdapter: cannot add IMU factor with omega between frame "
+                 << from_id << " and " << to_id << " (state handle missing)";
+    return false;
+  }
+  
+  // Call integration interface with omega data directly
+  // This adds both the IMU factor and stores omega for GP prior construction
+  bool success = integration_interface_->addImuFactorWithOmega(
+      prev_it->second,
+      curr_it->second,
+      pim,
+      omega_from,
+      omega_to);
+  
+  if (!success) {
+    LOG(WARNING) << "GraphTimeCentricBackendAdapter: failed to add IMU factor with omega between frame "
+                 << from_id << " and " << to_id;
+    return false;
+  }
+  
+  return true;
+}
+
 bool GraphTimeCentricBackendAdapter::optimizeGraph() {
   if (!initialized_) {
     LOG(ERROR) << "GraphTimeCentricBackendAdapter: not initialized, cannot optimize";
@@ -480,14 +521,15 @@ fgo::integration::KimeraIntegrationParams GraphTimeCentricBackendAdapter::create
   LOG(INFO) << "GraphTimeCentricBackendAdapter: IMU preintegration type = " 
             << params.imu_preintegration_type << " (0=Combined, 1=Regular+BiasFactor)";
   
-  if (params.use_gp_priors) {
-    params.gp_type = "WNOJ";
-  }
+  // GP motion prior configuration (Qc noise model is passed separately via setGPPriorParams)
+  params.use_gp_priors = backend_params_.add_gp_motion_priors;
+  params.gp_model_type = backend_params_.gp_model_type;
   
   params.optimization_period = 0.1;
   
   LOG(INFO) << "Created integration params: use_isam2=" << params.use_isam2
-            << ", use_gp=" << params.use_gp_priors
+            << ", use_gp_priors=" << params.use_gp_priors
+            << ", gp_model_type=" << params.gp_model_type
             << ", smoother_lag=" << params.smoother_lag
             << ", imu_rate=" << params.imu_rate;
   
@@ -511,6 +553,20 @@ void GraphTimeCentricBackendAdapter::setStereoCalibration(
   
   integration_interface_->setStereoCalibration(stereo_cal, B_Pose_leftCam, smart_noise, smart_params);
   LOG(INFO) << "GraphTimeCentricBackendAdapter: Stereo calibration and smart factor params set";
+}
+
+void GraphTimeCentricBackendAdapter::setGPPriorParams(
+    const gtsam::SharedNoiseModel& gp_qc_model,
+    const gtsam::Matrix6& gp_ad_matrix,
+    const gtsam::SharedNoiseModel& gp_acc_prior_noise) {
+  
+  if (!integration_interface_) {
+    LOG(ERROR) << "GraphTimeCentricBackendAdapter: Integration interface not initialized";
+    return;
+  }
+  
+  integration_interface_->setGPPriorParams(gp_qc_model, gp_ad_matrix, gp_acc_prior_noise);
+  LOG(INFO) << "GraphTimeCentricBackendAdapter: GP motion prior params set (Qc, ad matrix, acc prior)";
 }
 
 size_t GraphTimeCentricBackendAdapter::addStereoMeasurements(
