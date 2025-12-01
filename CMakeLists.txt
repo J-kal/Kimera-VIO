@@ -1,6 +1,10 @@
 cmake_minimum_required (VERSION 3.5)
 project(kimera_vio VERSION 1.0 LANGUAGES CXX C)
 
+# Manually set GeographicLib paths for workspace-wide install
+set(GeographicLib_INCLUDE_DIR "/workspaces/build/include")
+set(GeographicLib_LIBRARY "/workspaces/build/lib/libGeographic.so")
+
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -32,7 +36,21 @@ find_package(OpenCV REQUIRED)
 find_package(DBoW2 REQUIRED)
 find_package(KimeraRPGO REQUIRED)
 # GeographicLib is required by gtsam_unstable
+set(CMAKE_PREFIX_PATH "/workspaces/build" ${CMAKE_PREFIX_PATH})
 find_package(GeographicLib REQUIRED)
+# Fallback to manually set paths if not found
+
+if(NOT GeographicLib_LIBRARIES)
+    set(GeographicLib_LIBRARIES "${GeographicLib_LIBRARY}")
+endif()
+if(NOT GeographicLib_INCLUDE_DIRS)
+    set(GeographicLib_INCLUDE_DIRS "${GeographicLib_INCLUDE_DIR}")
+endif()
+if(GeographicLib_LIBRARY_DIRS)
+  link_directories(${GeographicLib_LIBRARY_DIRS})
+else()
+  link_directories("/workspaces/build/lib")
+endif()
 if(GeographicLib_LIBRARY_DIRS)
   link_directories(${GeographicLib_LIBRARY_DIRS})
 endif()
@@ -101,7 +119,9 @@ target_sources(${PROJECT_NAME} PRIVATE
   src/integration/GraphTimeCentricBackendAdapter.cpp
 )
 
-# Link against online_fgo_core if available
+## Link against online_fgo_core if available
+# Ensure CMAKE_PREFIX_PATH includes the build directory where online_fgo_coreConfig.cmake and online_fgo_coreTargets.cmake are located
+list(INSERT CMAKE_PREFIX_PATH 0 "/workspaces/build/online_fgo_core")
 find_package(online_fgo_core QUIET)
 if(online_fgo_core_FOUND)
   target_link_libraries(${PROJECT_NAME} PRIVATE 
@@ -174,6 +194,7 @@ target_include_directories(${PROJECT_NAME}
     ${GFLAGS_INCLUDE_DIRS}
     ${GLOG_INCLUDE_DIRS}
     ${GTSAM_INCLUDE_DIR}
+    ${GeographicLib_INCLUDE_DIR}
     $<BUILD_INTERFACE:${CMAKE_CURRENT_LIST_DIR}/include>
     $<INSTALL_INTERFACE:include>
 )
@@ -321,7 +342,7 @@ if(FALSE)  # Disabled tests for faster builds
 
   include(GoogleTest)
   gtest_discover_tests(testKimeraVIO PRE_TEST)
-endif(KIMERA_BUILD_TESTS)
+endif()
 
 ############################### INSTALL/EXPORT #################################
 ## We install the export that we defined above

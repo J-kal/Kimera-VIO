@@ -112,3 +112,4 @@ enable_factor_graph_debug_logging: 1
 # 3: Dogleg (batch nonlinear optimizer)
 # NOTE: Not all options may be supported in every build.
 smootherType: 0
+

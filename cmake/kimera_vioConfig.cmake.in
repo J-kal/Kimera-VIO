@@ -13,6 +13,5 @@ find_dependency(opengv REQUIRED)
 
 list(REMOVE_AT CMAKE_MODULE_PATH -1)
 
-if(NOT TARGET kimera_vio)
-  include("${KimeraVIO_CMAKE_DIR}/kimera_vioTargets.cmake")
-endif()
+include("${KimeraVIO_CMAKE_DIR}/kimera_vioTargets.cmake")
+
