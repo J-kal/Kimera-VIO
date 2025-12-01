@@ -232,7 +232,7 @@ fgo::integration::StateHandle GraphTimeCentricBackendAdapter::addKeyframeState(
 
   try {
     handle = integration_interface_->addKeyframeState(
-        keyframe_timestamp_sec, pose, velocity, bias);
+        keyframe_timestamp_sec, static_cast<size_t>(frame_id), pose, velocity, bias);
 
     if (handle.valid) {
       state_timestamps_.push_back(keyframe_timestamp_sec);
@@ -276,7 +276,7 @@ fgo::integration::StateHandle GraphTimeCentricBackendAdapter::bootstrapInitialSt
 
   try {
     handle = integration_interface_->bootstrapInitialState(
-        keyframe_timestamp_sec, pose, velocity, bias);
+        keyframe_timestamp_sec, static_cast<size_t>(frame_id), pose, velocity, bias);
 
     if (handle.valid) {
       state_timestamps_.push_back(keyframe_timestamp_sec);
