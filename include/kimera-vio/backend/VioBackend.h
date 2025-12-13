@@ -112,6 +112,15 @@ class VioBackend {
       const ImuBiasCallback& imu_bias_update_callback);
 
   /**
+   * @brief Extract optimized state from smoother and propagate to frontend
+   * Public wrapper for GraphTimeCentricBackendAdapter to trigger state extraction.
+   * This extracts pose/velocity/bias from the factor graph optimization result
+   * and invokes the IMU bias callback to update the frontend.
+   * @param cur_id Current keyframe ID to extract state for
+   */
+  void extractAndPropagateOptimizedState(const FrameId& cur_id);
+
+  /**
    * @brief registerMapUpdateCallback Register callback that will be called as
    * soon as the Backend optimizes the 3D landmarks.
    * @param map_update_callback Callback to call once backend finishes

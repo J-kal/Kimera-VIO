@@ -189,6 +189,13 @@ VioBackend::VioBackend(const gtsam::Pose3& B_Pose_leftCamRect,
               return this->updateSmoother(
                   result, new_factors, new_values, timestamps, delete_slots);
             });
+    
+    // Pass smoother pointer to adapter for ISAM2Result access (slot tracking)
+    graph_time_centric_adapter_->setSmoother(smoother_.get());
+    
+    // Pass VioBackend pointer to adapter for state extraction (updateStates access)
+    graph_time_centric_adapter_->setVioBackend(this);
+    
     if (!graph_time_centric_adapter_->initialize()) {
       LOG(FATAL) << "Failed to initialize GraphTimeCentric adapter.";
     }
@@ -208,18 +215,7 @@ BackendOutput::UniquePtr VioBackend::spinOnce(const BackendInput& input) {
     logger_->logBackendExtOdom(input);
   }
 
-  // BUFFERING DISABLED: All frames reaching here should be keyframes
-  // Pipeline filters out non-keyframes before pushing to backend.
-  //
-  // TO RESTORE NON-KEYFRAME BUFFERING:
-  // Uncomment the following block to buffer non-keyframes without producing output:
-  /*
-  if (!input.is_keyframe_) {
-    VLOG(2) << "Backend received non-keyframe, will buffer without producing output";
-    addVisualInertialStateAndOptimize(input);
-    return nullptr;  // No output for non-keyframes
-  }
-  */
+  
 
   bool backend_status = false;
   const BackendState backend_state = backend_state_;
@@ -407,6 +403,12 @@ bool VioBackend::initGraphTimeCentricStateAndSetPriors(
     LOG(ERROR) << "GraphTimeCentric bootstrap optimization failed.";
     return false;
   }
+
+  // CRITICAL: Update backend state variables with optimized values from smoother.
+  // This mirrors the non-GTC path where optimize() internally calls updateStates().
+  // Without this, imu_bias_lkf_, W_Pose_B_lkf_from_state_, W_Vel_B_lkf_ remain
+  // at their initial seed values and subsequent PIM predictions diverge.
+  updateStates(curr_kf_id_);
 
   VLOG(2) << "GraphTimeCentric: bootstrap optimization succeeded.";
   return true;
@@ -623,9 +625,25 @@ bool VioBackend::addVisualInertialStateAndOptimizeGraphTimeCentric(
   last_kf_id_ = curr_kf_id_;
   ++curr_kf_id_;
 
+  // === DEBUG: Initial value computation ===
+  LOG(INFO) << "=== INITIAL VALUE DEBUG for state " << curr_kf_id_ << " ===";
+  LOG(INFO) << "BEFORE PIM: W_Pose_B_lkf_from_state_.translation(): " 
+            << W_Pose_B_lkf_from_state_.translation().transpose();
+  LOG(INFO) << "BEFORE PIM: W_Vel_B_lkf_: " << W_Vel_B_lkf_.transpose();
+  LOG(INFO) << "BEFORE PIM: imu_bias_lkf_: acc=" << imu_bias_lkf_.accelerometer().transpose()
+            << " gyro=" << imu_bias_lkf_.gyroscope().transpose();
+
   // Extract state estimate from preintegration
   gtsam::NavState navstate_lkf(W_Pose_B_lkf_from_state_, W_Vel_B_lkf_);
   const gtsam::NavState& navstate_k = pim->predict(navstate_lkf, imu_bias_lkf_);
+
+  LOG(INFO) << "PIM deltaPij: " << pim->deltaPij().transpose();
+  LOG(INFO) << "PIM deltaVij: " << pim->deltaVij().transpose();
+  LOG(INFO) << "AFTER PIM: navstate_k.pose().translation(): " 
+            << navstate_k.pose().translation().transpose();
+  LOG(INFO) << "AFTER PIM: navstate_k.velocity(): " 
+            << navstate_k.velocity().transpose();
+  LOG(INFO) << "=== END INITIAL VALUE DEBUG ===";
 
   auto state_handle = graph_time_centric_adapter_->addKeyframeState(
       timestamp,
@@ -1611,10 +1629,20 @@ void VioBackend::addConstantVelocityFactor(const FrameId& from_id,
 }
 
 /* -------------------------------- UPDATE ---------------------------------- */
+void VioBackend::extractAndPropagateOptimizedState(const FrameId& cur_id) {
+  // Public wrapper that delegates to internal updateStates method
+  // Used by GraphTimeCentricBackendAdapter after optimization
+  updateStates(cur_id);
+}
+
 void VioBackend::updateStates(const FrameId& cur_id) {
+  LOG(INFO) << "=== updateStates() called for state " << cur_id << " ===";
+  
   VLOG(10) << "Starting to calculate estimate.";
   state_ = smoother_->calculateEstimate();
   VLOG(10) << "Finished to calculate estimate.";
+  
+  LOG(INFO) << "Smoother state has " << state_.size() << " keys";
 
   DCHECK(state_.find(gtsam::Symbol(kPoseSymbolChar, cur_id)) != state_.end());
   DCHECK(state_.find(gtsam::Symbol(kVelocitySymbolChar, cur_id)) !=
@@ -1644,6 +1672,16 @@ void VioBackend::updateStates(const FrameId& cur_id) {
   W_Vel_B_lkf_ = state_.at<Vector3>(gtsam::Symbol(kVelocitySymbolChar, cur_id));
   imu_bias_lkf_ = state_.at<gtsam::imuBias::ConstantBias>(
       gtsam::Symbol(kImuBiasSymbolChar, cur_id));
+
+  // === DEBUG: State feedback verification ===
+  LOG(INFO) << "OPTIMIZED pose for state " << cur_id << ": " 
+            << W_Pose_B_lkf_from_state_.translation().transpose();
+  LOG(INFO) << "OPTIMIZED velocity for state " << cur_id << ": " 
+            << W_Vel_B_lkf_.transpose();
+  LOG(INFO) << "OPTIMIZED bias for state " << cur_id << ": acc=" 
+            << imu_bias_lkf_.accelerometer().transpose()
+            << " gyro=" << imu_bias_lkf_.gyroscope().transpose();
+  LOG(INFO) << "=== END updateStates() ===";
 
   // Update output estimate by chaining relative motion estimates
   W_Pose_B_lkf_from_increments_ =
@@ -1694,7 +1732,15 @@ bool VioBackend::updateSmoother(Smoother::Result* result,
       gtsam::NonlinearFactorGraph combined_graph = smoother_->getFactors();
       combined_graph.push_back(new_factors.begin(), new_factors.end());
       gtsam::Values combined_values = smoother_->calculateEstimate();
-      combined_values.insert(new_values);
+      // FIX: Use update() instead of insert() to avoid ValuesKeyAlreadyExists
+      // Some keys in new_values may already exist in the estimate
+      for (const auto& key_value : new_values) {
+        if (combined_values.exists(key_value.key)) {
+          combined_values.update(key_value.key, key_value.value);
+        } else {
+          combined_values.insert(key_value.key, key_value.value);
+        }
+      }
       logFactorGraphDebugInfo(combined_graph, combined_values, 
                              "indeterminant_system_failure");
     }

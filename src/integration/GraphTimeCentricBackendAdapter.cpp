@@ -18,6 +18,7 @@
 //  GraphTimeCentricBackendAdapter implementation
 
 #include "kimera-vio/integration/GraphTimeCentricBackendAdapter.h"
+#include "kimera-vio/backend/VioBackend.h"
 #include <iostream>
 #include <sstream>
 #include <chrono>
@@ -105,6 +106,8 @@ GraphTimeCentricBackendAdapter::GraphTimeCentricBackendAdapter(
     : backend_params_(backend_params)
     , imu_params_(imu_params)
     , smoother_update_cb_(std::move(smoother_update_cb))
+    , vio_backend_smoother_(nullptr)
+    , vio_backend_(nullptr)
     , initialized_(false)
     , num_states_(0)
     , last_optimization_time_(0.0)
@@ -116,6 +119,16 @@ GraphTimeCentricBackendAdapter::GraphTimeCentricBackendAdapter(
 
 GraphTimeCentricBackendAdapter::~GraphTimeCentricBackendAdapter() {
   LOG(INFO) << "GraphTimeCentricBackendAdapter: destroyed";
+}
+
+void GraphTimeCentricBackendAdapter::setSmoother(Smoother* smoother) {
+  vio_backend_smoother_ = smoother;
+  LOG(INFO) << "GraphTimeCentricBackendAdapter: Smoother pointer set for ISAM2Result access";
+}
+
+void GraphTimeCentricBackendAdapter::setVioBackend(VioBackend* vio_backend) {
+  vio_backend_ = vio_backend;
+  LOG(INFO) << "GraphTimeCentricBackendAdapter: VioBackend pointer set for state extraction";
 }
 
 bool GraphTimeCentricBackendAdapter::initialize() {
@@ -157,6 +170,10 @@ bool GraphTimeCentricBackendAdapter::initialize() {
 
     // Create integration interface
     integration_interface_ = std::make_unique<fgo::integration::KimeraIntegrationInterface>(*standalone_app_);
+    
+    // NOTE: Optimization happens via smoother_update_cb_ callback to VioBackend::updateSmoother()
+    // GraphTimeCentric builds incremental updates, adapter passes them to VioBackend's native GTSAM smoother
+    // This ensures both standard and GTC pipelines use the same smoother with proper marginalization
     
     // Create integration parameters from Kimera params
     auto integration_params = createIntegrationParams();
@@ -412,7 +429,8 @@ bool GraphTimeCentricBackendAdapter::optimizeGraph() {
   LOG(INFO) << "GraphTimeCentricBackendAdapter: incremental update packet - "
             << "factors=" << packet.factors.size()
             << ", values=" << packet.values.size()
-            << ", key_timestamps=" << packet.key_timestamps.size();
+            << ", key_timestamps=" << packet.key_timestamps.size()
+            << ", delete_slots=" << packet.delete_slots.size();
 
   if (packet.factors.empty()) {
     LOG(WARNING) << "GraphTimeCentricBackendAdapter: packet.factors is empty before smoother call";
@@ -428,14 +446,111 @@ bool GraphTimeCentricBackendAdapter::optimizeGraph() {
                                           packet.key_timestamps.end());
 
   Smoother::Result result;
-  gtsam::FactorIndices delete_slots;
+  
+  // Use delete_slots from the packet - these are SmartFactor slots that need to be replaced
+  // CRITICAL: Without this, old SmartFactors accumulate in ISAM2, causing unbounded graph growth
+  gtsam::FactorIndices delete_slots = packet.delete_slots;
 
-  bool status = smoother_update_cb_(
-      &result, packet.factors, packet.values, timestamps, delete_slots);
+  bool status = false;
+  bool got_cheirality_exception = false;
+  gtsam::Symbol lmk_symbol_cheirality;
 
-  if (!status) {
+  try {
+    status = smoother_update_cb_(
+        &result, packet.factors, packet.values, timestamps, delete_slots);
+  } catch (const gtsam::CheiralityException& e) {
+    LOG(ERROR) << e.what();
+    lmk_symbol_cheirality = gtsam::Symbol(e.nearbyVariable());
+    LOG(ERROR) << "GraphTimeCentricBackendAdapter: CheiralityException near "
+               << lmk_symbol_cheirality.chr() << lmk_symbol_cheirality.index();
+    got_cheirality_exception = true;
+  } catch (const gtsam::StereoCheiralityException& e) {
+    LOG(ERROR) << e.what();
+    lmk_symbol_cheirality = gtsam::Symbol(e.nearbyVariable());
+    LOG(ERROR) << "GraphTimeCentricBackendAdapter: StereoCheiralityException near "
+               << lmk_symbol_cheirality.chr() << lmk_symbol_cheirality.index();
+    got_cheirality_exception = true;
+  }
+
+  if (!status && !got_cheirality_exception) {
     LOG(ERROR) << "GraphTimeCentricBackendAdapter: smoother update failed";
     return false;
+  }
+
+  // Mirror VioBackend cheirality recovery: remove offending landmark and retry.
+  if (got_cheirality_exception) {
+    if (!integration_interface_ || !integration_interface_->getGraph()) {
+      LOG(ERROR) << "GraphTimeCentricBackendAdapter: cannot handle cheirality - graph not available";
+      return false;
+    }
+
+    auto gtc_graph = integration_interface_->getGraph();
+    // The current smoother factors are available from VioBackend's smoother.
+    if (!vio_backend_smoother_) {
+      LOG(ERROR) << "GraphTimeCentricBackendAdapter: cannot handle cheirality - smoother pointer not set";
+      return false;
+    }
+
+    const gtsam::NonlinearFactorGraph& smoother_graph = vio_backend_smoother_->getFactors();
+
+    // Build cleaned retry packet.
+    gtsam::NonlinearFactorGraph retry_factors;
+    gtsam::Values retry_values;
+    fgo::solvers::FixedLagSmoother::KeyTimestampMap retry_timestamps;
+    gtsam::FactorIndices retry_delete_slots;
+
+    (void)gtc_graph->cleanCheiralityLandmarks(
+        lmk_symbol_cheirality,
+        smoother_graph,
+        packet.factors,
+        packet.values,
+        packet.key_timestamps,
+        delete_slots,
+        &retry_factors,
+        &retry_values,
+        &retry_timestamps,
+        &retry_delete_slots);
+
+    std::map<gtsam::Key, double> retry_ts_map(retry_timestamps.begin(), retry_timestamps.end());
+
+    LOG(WARNING) << "GraphTimeCentricBackendAdapter: retrying smoother update after cheirality cleanup";
+    status = smoother_update_cb_(&result, retry_factors, retry_values, retry_ts_map, retry_delete_slots);
+    if (!status) {
+      LOG(ERROR) << "GraphTimeCentricBackendAdapter: cheirality recovery retry failed";
+      return false;
+    }
+  }
+
+  // UPDATE SMART FACTOR SLOTS (mirrors VioBackend::updateNewSmartFactorsSlots)
+  // After successful optimization, extract slot numbers from ISAM2 result and update tracking
+  if (!packet.new_smart_factor_lmk_ids.empty() && vio_backend_smoother_) {
+    // Access ISAM2Result through VioBackend's smoother pointer
+    // This contains newFactorsIndices which map to slots in the factor graph
+    const gtsam::ISAM2Result& isam_result = vio_backend_smoother_->getISAM2Result();
+    
+    // CRITICAL: SmartFactors must be FIRST in packet.factors for correct slot mapping!
+    if (isam_result.newFactorsIndices.size() >= packet.new_smart_factor_lmk_ids.size()) {
+      std::vector<Slot> new_slots;
+      new_slots.reserve(packet.new_smart_factor_lmk_ids.size());
+      
+      // Extract slots for smart factors (they were added first)
+      for (size_t i = 0; i < packet.new_smart_factor_lmk_ids.size(); ++i) {
+        new_slots.push_back(static_cast<Slot>(isam_result.newFactorsIndices[i]));
+      }
+      
+      // Update slot tracking in GraphTimeCentricKimera
+      integration_interface_->updateSmartFactorSlots(
+          packet.new_smart_factor_lmk_ids, new_slots);
+      
+      LOG(INFO) << "GraphTimeCentricBackendAdapter: Updated " << new_slots.size()
+                << " SmartFactor slots in graph";
+    } else {
+      LOG(WARNING) << "GraphTimeCentricBackendAdapter: Mismatch - newFactorsIndices (" 
+                   << isam_result.newFactorsIndices.size() << ") vs SmartFactors (" 
+                   << packet.new_smart_factor_lmk_ids.size() << ")";
+    }
+  } else if (!packet.new_smart_factor_lmk_ids.empty() && !vio_backend_smoother_) {
+    LOG(WARNING) << "GraphTimeCentricBackendAdapter: Cannot update SmartFactor slots - smoother pointer not set!";
   }
 
   integration_interface_->markIncrementalUpdateConsumed();
@@ -445,6 +560,17 @@ bool GraphTimeCentricBackendAdapter::optimizeGraph() {
   }
 
   LOG(INFO) << "GraphTimeCentricBackendAdapter: optimization via backend smoother succeeded";
+  
+  // ✅ CRITICAL FIX: Extract optimized state from factor graph and propagate to frontend
+  // This updates imu_bias_lkf_ and triggers the bias update callback to ImuFrontend
+  if (vio_backend_ && num_states_ > 0) {
+    FrameId latest_kf_id = static_cast<FrameId>(num_states_ - 1);
+    vio_backend_->extractAndPropagateOptimizedState(latest_kf_id);
+    LOG(INFO) << "GraphTimeCentricBackendAdapter: extracted optimized state for frame " 
+              << latest_kf_id << " (pose/vel/bias updated, callback invoked)";
+  } else if (!vio_backend_) {
+    LOG(ERROR) << "GraphTimeCentricBackendAdapter: Cannot extract state - vio_backend_ pointer not set!";
+  }
   
   // Save factor graph debug info after each successful optimization (if enabled and interval matches)
   if (backend_params_.enable_factor_graph_debug_logging_) {

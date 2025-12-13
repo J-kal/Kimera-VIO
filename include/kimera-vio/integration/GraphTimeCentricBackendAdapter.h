@@ -104,6 +104,18 @@ public:
    * @return true if initialization successful
    */
   bool initialize();
+  
+  /**
+   * @brief Set pointer to VioBackend's smoother (for ISAM2 result access)
+   * @param smoother Pointer to VioBackend's smoother
+   */
+  void setSmoother(Smoother* smoother);
+
+  /**
+   * @brief Set pointer to VioBackend instance (for state extraction via updateStates)
+   * @param vio_backend Pointer to VioBackend instance
+   */
+  void setVioBackend(class VioBackend* vio_backend);
 
   /**
    * @brief Check if adapter is initialized
@@ -323,6 +335,12 @@ private:
   std::unique_ptr<fgo::integration::KimeraIntegrationInterface> integration_interface_;
   std::unique_ptr<fgo::core::ApplicationInterface> standalone_app_;
   SmootherUpdateCallback smoother_update_cb_;
+  
+  // Pointer to VioBackend's smoother for accessing ISAM2 result (slot tracking)
+  Smoother* vio_backend_smoother_;
+  
+  // Pointer to VioBackend instance for calling updateStates() (state extraction)
+  class VioBackend* vio_backend_;
   
   // State
   bool initialized_;
