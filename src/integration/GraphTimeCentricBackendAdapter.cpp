@@ -561,16 +561,10 @@ bool GraphTimeCentricBackendAdapter::optimizeGraph() {
 
   LOG(INFO) << "GraphTimeCentricBackendAdapter: optimization via backend smoother succeeded";
   
-  // ✅ CRITICAL FIX: Extract optimized state from factor graph and propagate to frontend
-  // This updates imu_bias_lkf_ and triggers the bias update callback to ImuFrontend
-  if (vio_backend_ && num_states_ > 0) {
-    FrameId latest_kf_id = static_cast<FrameId>(num_states_ - 1);
-    vio_backend_->extractAndPropagateOptimizedState(latest_kf_id);
-    LOG(INFO) << "GraphTimeCentricBackendAdapter: extracted optimized state for frame " 
-              << latest_kf_id << " (pose/vel/bias updated, callback invoked)";
-  } else if (!vio_backend_) {
-    LOG(ERROR) << "GraphTimeCentricBackendAdapter: Cannot extract state - vio_backend_ pointer not set!";
-  }
+  // NOTE: State extraction moved to VioBackend::addVisualInertialStateAndOptimize()
+  // after optimization completes. This prevents intermediate state updates during
+  // multi-pass optimization that could corrupt W_Pose_B_lkf_from_state_ used for
+  // next frame's PIM computation.
   
   // Save factor graph debug info after each successful optimization (if enabled and interval matches)
   if (backend_params_.enable_factor_graph_debug_logging_) {

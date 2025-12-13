@@ -626,24 +626,27 @@ bool VioBackend::addVisualInertialStateAndOptimizeGraphTimeCentric(
   ++curr_kf_id_;
 
   // === DEBUG: Initial value computation ===
-  LOG(INFO) << "=== INITIAL VALUE DEBUG for state " << curr_kf_id_ << " ===";
-  LOG(INFO) << "BEFORE PIM: W_Pose_B_lkf_from_state_.translation(): " 
-            << W_Pose_B_lkf_from_state_.translation().transpose();
-  LOG(INFO) << "BEFORE PIM: W_Vel_B_lkf_: " << W_Vel_B_lkf_.transpose();
-  LOG(INFO) << "BEFORE PIM: imu_bias_lkf_: acc=" << imu_bias_lkf_.accelerometer().transpose()
-            << " gyro=" << imu_bias_lkf_.gyroscope().transpose();
+  VLOG(2) << "=== INITIAL VALUE DEBUG for state " << curr_kf_id_ << " ===";
+  VLOG(2) << "BEFORE PIM: W_Pose_B_lkf_from_state_.translation(): " 
+          << W_Pose_B_lkf_from_state_.translation().transpose();
+  VLOG(2) << "BEFORE PIM: W_Vel_B_lkf_: " << W_Vel_B_lkf_.transpose();
+  VLOG(2) << "BEFORE PIM: imu_bias_lkf_: acc=" << imu_bias_lkf_.accelerometer().transpose()
+          << " gyro=" << imu_bias_lkf_.gyroscope().transpose();
 
   // Extract state estimate from preintegration
+  // CRITICAL: Uses W_Pose_B_lkf_from_state_ which was set by the PREVIOUS keyframe's
+  // extractAndPropagateOptimizedState() call. This must contain the FINAL optimized
+  // state, not any intermediate optimization result.
   gtsam::NavState navstate_lkf(W_Pose_B_lkf_from_state_, W_Vel_B_lkf_);
   const gtsam::NavState& navstate_k = pim->predict(navstate_lkf, imu_bias_lkf_);
 
-  LOG(INFO) << "PIM deltaPij: " << pim->deltaPij().transpose();
-  LOG(INFO) << "PIM deltaVij: " << pim->deltaVij().transpose();
-  LOG(INFO) << "AFTER PIM: navstate_k.pose().translation(): " 
-            << navstate_k.pose().translation().transpose();
-  LOG(INFO) << "AFTER PIM: navstate_k.velocity(): " 
-            << navstate_k.velocity().transpose();
-  LOG(INFO) << "=== END INITIAL VALUE DEBUG ===";
+  VLOG(2) << "PIM deltaPij: " << pim->deltaPij().transpose();
+  VLOG(2) << "PIM deltaVij: " << pim->deltaVij().transpose();
+  VLOG(2) << "AFTER PIM: navstate_k.pose().translation(): " 
+          << navstate_k.pose().translation().transpose();
+  VLOG(2) << "AFTER PIM: navstate_k.velocity(): " 
+          << navstate_k.velocity().transpose();
+  VLOG(2) << "=== END INITIAL VALUE DEBUG ===";
 
   auto state_handle = graph_time_centric_adapter_->addKeyframeState(
       timestamp,
@@ -716,7 +719,14 @@ bool VioBackend::addVisualInertialStateAndOptimizeGraphTimeCentric(
   bool optimization_success = graph_time_centric_adapter_->optimizeGraph();
 
   if (optimization_success) {
-    updateStates(curr_kf_id_);
+    // CRITICAL FIX: Extract optimized state ONCE per keyframe, AFTER all optimization passes
+    // This prevents intermediate wrong states from corrupting W_Pose_B_lkf_from_state_
+    // which is used for computing initial values via PIM for the next keyframe.
+    // Previous bug: extractAndPropagateOptimizedState was called multiple times during
+    // optimization in the adapter, causing exponential error accumulation.
+    extractAndPropagateOptimizedState(curr_kf_id_);
+    LOG(INFO) << "GraphTimeCentric: extracted final optimized state for frame " 
+              << curr_kf_id_ << " after optimization";
   } else {
     LOG(ERROR) << "GraphTimeCentric optimization failed";
   }
@@ -1636,13 +1646,13 @@ void VioBackend::extractAndPropagateOptimizedState(const FrameId& cur_id) {
 }
 
 void VioBackend::updateStates(const FrameId& cur_id) {
-  LOG(INFO) << "=== updateStates() called for state " << cur_id << " ===";
+  VLOG(2) << "=== updateStates() called for state " << cur_id << " ===";
   
   VLOG(10) << "Starting to calculate estimate.";
   state_ = smoother_->calculateEstimate();
   VLOG(10) << "Finished to calculate estimate.";
   
-  LOG(INFO) << "Smoother state has " << state_.size() << " keys";
+  VLOG(2) << "Smoother state has " << state_.size() << " keys";
 
   DCHECK(state_.find(gtsam::Symbol(kPoseSymbolChar, cur_id)) != state_.end());
   DCHECK(state_.find(gtsam::Symbol(kVelocitySymbolChar, cur_id)) !=
@@ -1667,21 +1677,22 @@ void VioBackend::updateStates(const FrameId& cur_id) {
     B_lkf_Pose_kf = W_Pose_B_lkf.between(W_Pose_B_kf);
   }
 
-  // Update latest state estimate
+  // Update latest state estimate - this will be used for next frame's PIM
+  // CRITICAL: This must only be called ONCE per keyframe with the FINAL optimized state
   W_Pose_B_lkf_from_state_ = W_Pose_B_kf;
   W_Vel_B_lkf_ = state_.at<Vector3>(gtsam::Symbol(kVelocitySymbolChar, cur_id));
   imu_bias_lkf_ = state_.at<gtsam::imuBias::ConstantBias>(
       gtsam::Symbol(kImuBiasSymbolChar, cur_id));
 
   // === DEBUG: State feedback verification ===
-  LOG(INFO) << "OPTIMIZED pose for state " << cur_id << ": " 
-            << W_Pose_B_lkf_from_state_.translation().transpose();
-  LOG(INFO) << "OPTIMIZED velocity for state " << cur_id << ": " 
-            << W_Vel_B_lkf_.transpose();
-  LOG(INFO) << "OPTIMIZED bias for state " << cur_id << ": acc=" 
-            << imu_bias_lkf_.accelerometer().transpose()
-            << " gyro=" << imu_bias_lkf_.gyroscope().transpose();
-  LOG(INFO) << "=== END updateStates() ===";
+  VLOG(2) << "OPTIMIZED pose for state " << cur_id << ": " 
+          << W_Pose_B_lkf_from_state_.translation().transpose();
+  VLOG(2) << "OPTIMIZED velocity for state " << cur_id << ": " 
+          << W_Vel_B_lkf_.transpose();
+  VLOG(2) << "OPTIMIZED bias for state " << cur_id << ": acc=" 
+          << imu_bias_lkf_.accelerometer().transpose()
+          << " gyro=" << imu_bias_lkf_.gyroscope().transpose();
+  VLOG(2) << "=== END updateStates() ===";
 
   // Update output estimate by chaining relative motion estimates
   W_Pose_B_lkf_from_increments_ =
