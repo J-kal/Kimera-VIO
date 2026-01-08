@@ -171,23 +171,24 @@ bool BackendParams::parseYAMLVioBackendParams(const YamlParser& yaml_parser) {
                            &mono_translation_scale_factor_);
 
   // GraphTimeCentric adapter toggle
-  yaml_parser.getYamlParam("use_graph_time_centric", &use_graph_time_centric);
+  yaml_parser.getYamlParam("use_graph_time_centric", &use_graph_time_centric_);
   yaml_parser.getYamlParam("smootherType", &smootherType_);
   yaml_parser.getYamlParam("enable_factor_graph_debug_logging", &enable_factor_graph_debug_logging_);
   yaml_parser.getYamlParam("factor_graph_debug_save_dir", &factor_graph_debug_save_dir_);
   yaml_parser.getYamlParam("factor_graph_debug_save_interval", &factor_graph_debug_save_interval_);
+  yaml_parser.getYamlParam("factor_graph_debug_include_smart_factors", &factor_graph_debug_include_smart_factors_);
   
   // GP motion priors (GraphTimeCentric only) - read from kimera namespace
-  yaml_parser.getNestedYamlParam("kimera", "add_gp_motion_priors", &add_gp_motion_priors);
-  yaml_parser.getNestedYamlParam("kimera", "gp_model_type", &gp_model_type);
-  yaml_parser.getNestedYamlParam("kimera", "qc_gp_trans_var", &qc_gp_trans_var);
-  yaml_parser.getNestedYamlParam("kimera", "qc_gp_rot_var", &qc_gp_rot_var);
+  yaml_parser.getNestedYamlParam("kimera", "add_gp_motion_priors", &add_gp_motion_priors_);
+  yaml_parser.getNestedYamlParam("kimera", "gp_model_type", &gp_model_type_);
+  yaml_parser.getNestedYamlParam("kimera", "qc_gp_trans_var", &qc_gp_trans_var_);
+  yaml_parser.getNestedYamlParam("kimera", "qc_gp_rot_var", &qc_gp_rot_var_);
   // Singer model parameters
-  yaml_parser.getNestedYamlParam("kimera", "ad_trans", &ad_trans);
-  yaml_parser.getNestedYamlParam("kimera", "ad_rot", &ad_rot);
+  yaml_parser.getNestedYamlParam("kimera", "ad_trans", &ad_trans_);
+  yaml_parser.getNestedYamlParam("kimera", "ad_rot", &ad_rot_);
   // Full variant parameters
-  yaml_parser.getNestedYamlParam("kimera", "initial_acc_sigma_trans", &initial_acc_sigma_trans);
-  yaml_parser.getNestedYamlParam("kimera", "initial_acc_sigma_rot", &initial_acc_sigma_rot);
+  yaml_parser.getNestedYamlParam("kimera", "initial_acc_sigma_trans", &initial_acc_sigma_trans_);
+  yaml_parser.getNestedYamlParam("kimera", "initial_acc_sigma_rot", &initial_acc_sigma_rot_);
 
   return true;
 }
@@ -231,13 +232,22 @@ bool BackendParams::equalsVioBackendParams(const BackendParams& vp2,
       (wildfire_threshold_ == vp2.wildfire_threshold_) &&
       (useDogLeg_ == vp2.useDogLeg_) &&
       (pose_guess_source_ == vp2.pose_guess_source_) &&
-      (fabs(mono_translation_scale_factor_ ==
-            vp2.mono_translation_scale_factor_)) &&
-      (use_graph_time_centric == vp2.use_graph_time_centric) &&
+      (fabs(mono_translation_scale_factor_ -
+            vp2.mono_translation_scale_factor_) <= tol) &&
+      (use_graph_time_centric_ == vp2.use_graph_time_centric_) &&
+      (add_gp_motion_priors_ == vp2.add_gp_motion_priors_) &&
+      (gp_model_type_ == vp2.gp_model_type_) &&
+      (fabs(qc_gp_trans_var_ - vp2.qc_gp_trans_var_) <= tol) &&
+      (fabs(qc_gp_rot_var_ - vp2.qc_gp_rot_var_) <= tol) &&
+      (fabs(ad_trans_ - vp2.ad_trans_) <= tol) &&
+      (fabs(ad_rot_ - vp2.ad_rot_) <= tol) &&
+      (fabs(initial_acc_sigma_trans_ - vp2.initial_acc_sigma_trans_) <= tol) &&
+      (fabs(initial_acc_sigma_rot_ - vp2.initial_acc_sigma_rot_) <= tol) &&
       (smootherType_ == vp2.smootherType_) &&
       (enable_factor_graph_debug_logging_ == vp2.enable_factor_graph_debug_logging_) &&
       (factor_graph_debug_save_dir_ == vp2.factor_graph_debug_save_dir_) &&
-      (factor_graph_debug_save_interval_ == vp2.factor_graph_debug_save_interval_);
+      (factor_graph_debug_save_interval_ == vp2.factor_graph_debug_save_interval_) &&
+      (factor_graph_debug_include_smart_factors_ == vp2.factor_graph_debug_include_smart_factors_);
 }
 
 void BackendParams::printVioBackendParams() const {
@@ -312,7 +322,23 @@ void BackendParams::printVioBackendParams() const {
       "Mono Translation Scale Factor",
       mono_translation_scale_factor_,
       "Use Graph Time Centric",
-      use_graph_time_centric,
+      use_graph_time_centric_,
+      "Add GP Motion Priors",
+      add_gp_motion_priors_,
+      "GP Model Type",
+      gp_model_type_,
+      "GP Trans Variance (Qc)",
+      qc_gp_trans_var_,
+      "GP Rot Variance (Qc)",
+      qc_gp_rot_var_,
+      "Singer Trans Damping (ad)",
+      ad_trans_,
+      "Singer Rot Damping (ad)",
+      ad_rot_,
+      "Initial Acc Sigma Trans",
+      initial_acc_sigma_trans_,
+      "Initial Acc Sigma Rot",
+      initial_acc_sigma_rot_,
       "Smoother Type",
       smootherType_,
       "Enable Factor Graph Debug Logging",
@@ -320,7 +346,9 @@ void BackendParams::printVioBackendParams() const {
       "Factor Graph Debug Save Dir",
       factor_graph_debug_save_dir_,
       "Factor Graph Debug Save Interval",
-      factor_graph_debug_save_interval_);
+      factor_graph_debug_save_interval_,
+      "Factor Graph Debug Include Smart Factors",
+      factor_graph_debug_include_smart_factors_);
   LOG(INFO) << out.str();
   LOG(INFO) << "** Backend Iinitialization Parameters **\n"
             << "initial_ground_truth_state_: ";

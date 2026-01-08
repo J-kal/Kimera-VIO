@@ -133,37 +133,37 @@ VioBackend::VioBackend(const gtsam::Pose3& B_Pose_leftCamRect,
 
   // Initialize GP motion prior parameters (GraphTimeCentric only)
   // This follows the same pattern as smart_noise_ - created here, passed to adapter at runtime
-  if (backend_params.add_gp_motion_priors) {
+  if (backend_params.add_gp_motion_priors_) {
     // Qc noise model (used by all GP prior types)
     gtsam::Vector6 qc_variances;
-    qc_variances << backend_params.qc_gp_trans_var, backend_params.qc_gp_trans_var, 
-                    backend_params.qc_gp_trans_var, backend_params.qc_gp_rot_var,
-                    backend_params.qc_gp_rot_var, backend_params.qc_gp_rot_var;
+    qc_variances << backend_params.qc_gp_trans_var_, backend_params.qc_gp_trans_var_, 
+                    backend_params.qc_gp_trans_var_, backend_params.qc_gp_rot_var_,
+                    backend_params.qc_gp_rot_var_, backend_params.qc_gp_rot_var_;
     gp_qc_model_ = gtsam::noiseModel::Diagonal::Variances(qc_variances);
     
     // Singer model ad matrix (acceleration damping)
     // Diagonal matrix: [ad_trans, ad_trans, ad_trans, ad_rot, ad_rot, ad_rot]
     gp_ad_matrix_ = gtsam::Matrix6::Zero();
-    gp_ad_matrix_(0, 0) = backend_params.ad_trans;
-    gp_ad_matrix_(1, 1) = backend_params.ad_trans;
-    gp_ad_matrix_(2, 2) = backend_params.ad_trans;
-    gp_ad_matrix_(3, 3) = backend_params.ad_rot;
-    gp_ad_matrix_(4, 4) = backend_params.ad_rot;
-    gp_ad_matrix_(5, 5) = backend_params.ad_rot;
+    gp_ad_matrix_(0, 0) = backend_params.ad_trans_;
+    gp_ad_matrix_(1, 1) = backend_params.ad_trans_;
+    gp_ad_matrix_(2, 2) = backend_params.ad_trans_;
+    gp_ad_matrix_(3, 3) = backend_params.ad_rot_;
+    gp_ad_matrix_(4, 4) = backend_params.ad_rot_;
+    gp_ad_matrix_(5, 5) = backend_params.ad_rot_;
     
     // Initial acceleration state prior (for future Full variants)
     gtsam::Vector6 acc_sigmas;
-    acc_sigmas << backend_params.initial_acc_sigma_trans, backend_params.initial_acc_sigma_trans,
-                  backend_params.initial_acc_sigma_trans, backend_params.initial_acc_sigma_rot,
-                  backend_params.initial_acc_sigma_rot, backend_params.initial_acc_sigma_rot;
+    acc_sigmas << backend_params.initial_acc_sigma_trans_, backend_params.initial_acc_sigma_trans_,
+                  backend_params.initial_acc_sigma_trans_, backend_params.initial_acc_sigma_rot_,
+                  backend_params.initial_acc_sigma_rot_, backend_params.initial_acc_sigma_rot_;
     gp_acc_prior_noise_ = gtsam::noiseModel::Diagonal::Sigmas(acc_sigmas);
     
     LOG(INFO) << "VioBackend: GP motion prior params initialized - "
-              << "qc_trans=" << backend_params.qc_gp_trans_var
-              << ", qc_rot=" << backend_params.qc_gp_rot_var
-              << ", ad_trans=" << backend_params.ad_trans
-              << ", ad_rot=" << backend_params.ad_rot
-              << ", gp_model_type=" << backend_params.gp_model_type;
+              << "qc_trans=" << backend_params.qc_gp_trans_var_
+              << ", qc_rot=" << backend_params.qc_gp_rot_var_
+              << ", ad_trans=" << backend_params.ad_trans_
+              << ", ad_rot=" << backend_params.ad_rot_
+              << ", gp_model_type=" << backend_params.gp_model_type_;
   }
 
   // Reset debug info.
@@ -174,9 +174,9 @@ VioBackend::VioBackend(const gtsam::Pose3& B_Pose_leftCamRect,
 
   // Optional GraphTimeCentric adapter initialization (runtime toggle)
   LOG(INFO) << "Backend parameter use_graph_time_centric: " 
-            << (backend_params_.use_graph_time_centric ? "true" : "false");
+            << (backend_params_.use_graph_time_centric_ ? "true" : "false");
   
-  if (backend_params_.use_graph_time_centric) {
+  if (backend_params_.use_graph_time_centric_) {
     LOG(INFO) << "Initializing GraphTimeCentric adapter...";
     graph_time_centric_adapter_ =
         std::make_unique<GraphTimeCentricBackendAdapter>(
@@ -327,7 +327,7 @@ void VioBackend::registerMapUpdateCallback(
 /* -------------------------------------------------------------------------- */
 bool VioBackend::initStateAndSetPriors(
     const VioNavStateTimestamped& vio_nav_state_initial_seed) {
-  if (backend_params_.use_graph_time_centric && graph_time_centric_adapter_) {
+  if (backend_params_.use_graph_time_centric_ && graph_time_centric_adapter_) {
     return initGraphTimeCentricStateAndSetPriors(
         vio_nav_state_initial_seed);
   }
@@ -556,7 +556,7 @@ bool VioBackend::addVisualInertialStateAndOptimize(const BackendInput& input) {
   VLOG(10) << "Add visual inertial state and optimize.";
   CHECK(input.pim_);
 
-  if (backend_params_.use_graph_time_centric && graph_time_centric_adapter_) {
+  if (backend_params_.use_graph_time_centric_ && graph_time_centric_adapter_) {
     CHECK(input.status_stereo_measurements_kf_);
     bool is_smoother_ok = addVisualInertialStateAndOptimizeGraphTimeCentric(
         input.timestamp_,
@@ -595,7 +595,7 @@ bool VioBackend::addVisualInertialStateAndOptimizeGraphTimeCentric(
   static_cast<void>(body_kf_world_OdomVel_body_kf);
 
   
-  CHECK(backend_params_.use_graph_time_centric);
+  CHECK(backend_params_.use_graph_time_centric_);
   CHECK(graph_time_centric_adapter_);
   CHECK(pim);
 
@@ -616,7 +616,7 @@ bool VioBackend::addVisualInertialStateAndOptimizeGraphTimeCentric(
   // Initialize GP motion prior params on first call (only once)
   // This follows the same pattern as stereo calibration
   static bool gp_priors_initialized = false;
-  if (!gp_priors_initialized && backend_params_.add_gp_motion_priors && gp_qc_model_) {
+  if (!gp_priors_initialized && backend_params_.add_gp_motion_priors_ && gp_qc_model_) {
     graph_time_centric_adapter_->setGPPriorParams(gp_qc_model_, gp_ad_matrix_, gp_acc_prior_noise_);
     gp_priors_initialized = true;
     LOG(INFO) << "GraphTimeCentric: GP motion prior params initialized (Qc, ad, acc_prior)";
@@ -667,7 +667,7 @@ bool VioBackend::addVisualInertialStateAndOptimizeGraphTimeCentric(
   if (last_kf_id_ >= 0) {
     // For full GP motion priors, we need omega (angular velocity) from the raw IMU data
     // Use OmegaAtState struct for clean encapsulation (contains omega AND acceleration for WNOJ)
-    if (backend_params_.add_gp_motion_priors && imu_acc_gyrs.cols() > 0) {
+    if (backend_params_.add_gp_motion_priors_ && imu_acc_gyrs.cols() > 0) {
       // Compute OmegaAtState at keyframe boundaries using factory methods
       // First measurement (at last keyframe) and last measurement (at current keyframe)
       // Note: OmegaAtState is defined in online_fgo_core/integration/KimeraIntegrationInterface.h
@@ -1723,9 +1723,75 @@ bool VioBackend::updateSmoother(Smoother::Result* result,
   try {
     // Update smoother.
     VLOG(10) << "Starting update of smoother_...";
+    
+    // === DEBUG: Log actual values being passed to smoother ===
+    LOG(INFO) << "VioBackend::updateSmoother - About to call smoother_->update with:";
+    LOG(INFO) << "  new_factors.size() = " << new_factors.size();
+    LOG(INFO) << "  new_values.size() = " << new_values.size();
+    LOG(INFO) << "  timestamps.size() = " << timestamps.size();
+    LOG(INFO) << "  delete_slots.size() = " << delete_slots.size();
+    LOG(INFO) << "  new_values keys: ";
+    for (const auto& kv : new_values) {
+      LOG(INFO) << "    " << gtsam::DefaultKeyFormatter(kv.key);
+    }
+    LOG(INFO) << "  timestamp keys: ";
+    for (const auto& ts : timestamps) {
+      LOG(INFO) << "    " << gtsam::DefaultKeyFormatter(ts.first) << " -> " << std::fixed << ts.second;
+    }
+    LOG(INFO) << "  Checking timestamp/value consistency:";
+    for (const auto& kv : new_values) {
+      if (timestamps.find(kv.key) == timestamps.end()) {
+        LOG(ERROR) << "    MISSING TIMESTAMP for key: " << gtsam::DefaultKeyFormatter(kv.key);
+      } else {
+        LOG(INFO) << "    " << gtsam::DefaultKeyFormatter(kv.key) << " has timestamp";
+      }
+    }
+    LOG(INFO) << "  current smoother keys:";
+    gtsam::Values smoother_values = smoother_->calculateEstimate();
+    for (const auto& kv : smoother_values) {
+      LOG(INFO) << "    " << gtsam::DefaultKeyFormatter(kv.key);
+    }
+    LOG(INFO) << "  === END DEBUG ===";
+    
     *result =
         smoother_->update(new_factors, new_values, timestamps, delete_slots);
     VLOG(10) << "Finished update of smoother_.";
+    
+    // Log smoother size after update to verify marginalization
+    gtsam::Values post_update_values = smoother_->calculateEstimate();
+    LOG(INFO) << "VioBackend: Smoother Update - "
+              << "GraphSize=" << smoother_->getFactors().size()
+              << ", Variables=" << smoother_->timestamps().size()
+              << ", Marginalized=" << result->linearVariables;
+    
+    // CRITICAL MARGINALIZATION TRACKING: Log which keys were marginalized
+    if (result->linearVariables > 0) {
+      LOG(WARNING) << "VioBackend: " << result->linearVariables << " variables were MARGINALIZED by smoother";
+      
+      // Compare pre-update and post-update values to identify marginalized keys
+      std::set<gtsam::Key> pre_keys, post_keys;
+      for (const auto& kv : smoother_values) {
+        pre_keys.insert(kv.key);
+      }
+      for (const auto& kv : post_update_values) {
+        post_keys.insert(kv.key);
+      }
+      
+      // Keys in pre but not in post were marginalized
+      std::vector<gtsam::Key> marginalized_keys;
+      std::set_difference(pre_keys.begin(), pre_keys.end(),
+                         post_keys.begin(), post_keys.end(),
+                         std::back_inserter(marginalized_keys));
+      
+      if (!marginalized_keys.empty()) {
+        std::stringstream marg_ss;
+        for (const auto& key : marginalized_keys) {
+          marg_ss << gtsam::DefaultKeyFormatter(key) << " ";
+        }
+        LOG(WARNING) << "VioBackend: Marginalized keys: " << marg_ss.str();
+      }
+    }
+
     if (debug_smoother_) {
       printSmootherInfo(new_factors, delete_slots, "CATCHING EXCEPTION", false);
       debug_smoother_ = false;
@@ -1846,7 +1912,13 @@ bool VioBackend::updateSmoother(Smoother::Result* result,
       gtsam::NonlinearFactorGraph combined_graph = smoother_->getFactors();
       combined_graph.push_back(new_factors.begin(), new_factors.end());
       gtsam::Values combined_values = smoother_->calculateEstimate();
-      combined_values.insert(new_values);
+      for (const auto& key_value : new_values) {
+        if (combined_values.exists(key_value.key)) {
+          combined_values.update(key_value.key, key_value.value);
+        } else {
+          combined_values.insert(key_value.key, key_value.value);
+        }
+      }
       logFactorGraphDebugInfo(combined_graph, combined_values, 
                              "invalid_noise_model_failure");
     }
@@ -1858,7 +1930,13 @@ bool VioBackend::updateSmoother(Smoother::Result* result,
       gtsam::NonlinearFactorGraph combined_graph = smoother_->getFactors();
       combined_graph.push_back(new_factors.begin(), new_factors.end());
       gtsam::Values combined_values = smoother_->calculateEstimate();
-      combined_values.insert(new_values);
+      for (const auto& key_value : new_values) {
+        if (combined_values.exists(key_value.key)) {
+          combined_values.update(key_value.key, key_value.value);
+        } else {
+          combined_values.insert(key_value.key, key_value.value);
+        }
+      }
       logFactorGraphDebugInfo(combined_graph, combined_values, 
                              "invalid_matrix_block_failure");
     }
@@ -1870,7 +1948,13 @@ bool VioBackend::updateSmoother(Smoother::Result* result,
       gtsam::NonlinearFactorGraph combined_graph = smoother_->getFactors();
       combined_graph.push_back(new_factors.begin(), new_factors.end());
       gtsam::Values combined_values = smoother_->calculateEstimate();
-      combined_values.insert(new_values);
+      for (const auto& key_value : new_values) {
+        if (combined_values.exists(key_value.key)) {
+          combined_values.update(key_value.key, key_value.value);
+        } else {
+          combined_values.insert(key_value.key, key_value.value);
+        }
+      }
       logFactorGraphDebugInfo(combined_graph, combined_values, 
                              "invalid_dense_elimination_failure");
     }
@@ -1882,7 +1966,13 @@ bool VioBackend::updateSmoother(Smoother::Result* result,
       gtsam::NonlinearFactorGraph combined_graph = smoother_->getFactors();
       combined_graph.push_back(new_factors.begin(), new_factors.end());
       gtsam::Values combined_values = smoother_->calculateEstimate();
-      combined_values.insert(new_values);
+      for (const auto& key_value : new_values) {
+        if (combined_values.exists(key_value.key)) {
+          combined_values.update(key_value.key, key_value.value);
+        } else {
+          combined_values.insert(key_value.key, key_value.value);
+        }
+      }
       logFactorGraphDebugInfo(combined_graph, combined_values, 
                              "invalid_argument_failure");
     }
@@ -1894,7 +1984,13 @@ bool VioBackend::updateSmoother(Smoother::Result* result,
       gtsam::NonlinearFactorGraph combined_graph = smoother_->getFactors();
       combined_graph.push_back(new_factors.begin(), new_factors.end());
       gtsam::Values combined_values = smoother_->calculateEstimate();
-      combined_values.insert(new_values);
+      for (const auto& key_value : new_values) {
+        if (combined_values.exists(key_value.key)) {
+          combined_values.update(key_value.key, key_value.value);
+        } else {
+          combined_values.insert(key_value.key, key_value.value);
+        }
+      }
       logFactorGraphDebugInfo(combined_graph, combined_values, 
                              "values_key_does_not_exist_failure");
     }
@@ -1906,7 +2002,13 @@ bool VioBackend::updateSmoother(Smoother::Result* result,
       gtsam::NonlinearFactorGraph combined_graph = smoother_->getFactors();
       combined_graph.push_back(new_factors.begin(), new_factors.end());
       gtsam::Values combined_values = smoother_->calculateEstimate();
-      combined_values.insert(new_values);
+      for (const auto& key_value : new_values) {
+        if (combined_values.exists(key_value.key)) {
+          combined_values.update(key_value.key, key_value.value);
+        } else {
+          combined_values.insert(key_value.key, key_value.value);
+        }
+      }
       logFactorGraphDebugInfo(combined_graph, combined_values, 
                              "cholesky_failed_failure");
     }
@@ -1973,7 +2075,83 @@ bool VioBackend::updateSmoother(Smoother::Result* result,
     printSmootherInfo(new_factors, delete_slots);
     return false;
   } catch (const std::out_of_range& e) {
-    LOG(ERROR) << e.what();
+    LOG(ERROR) << "std::out_of_range exception: " << e.what();
+    
+    // CRITICAL DIAGNOSTIC: Identify which key(s) caused the out_of_range error
+    LOG(ERROR) << "===== DETAILED KEY VALIDATION ANALYSIS =====";
+    
+    gtsam::Values smoother_values = smoother_->calculateEstimate();
+    LOG(ERROR) << "Smoother has " << smoother_values.size() << " values:";
+    std::set<gtsam::Key> smoother_keys_set;
+    for (const auto& kv : smoother_values) {
+      smoother_keys_set.insert(kv.key);
+    }
+    std::stringstream smoother_ss;
+    for (const auto& key : smoother_keys_set) {
+      smoother_ss << gtsam::DefaultKeyFormatter(key) << " ";
+    }
+    LOG(ERROR) << "  Keys: " << smoother_ss.str();
+    
+    LOG(ERROR) << "New values has " << new_values.size() << " values:";
+    std::set<gtsam::Key> new_values_keys_set;
+    for (const auto& kv : new_values) {
+      new_values_keys_set.insert(kv.key);
+    }
+    std::stringstream new_values_ss;
+    for (const auto& key : new_values_keys_set) {
+      new_values_ss << gtsam::DefaultKeyFormatter(key) << " ";
+    }
+    LOG(ERROR) << "  Keys: " << new_values_ss.str();
+    
+    // Merge available keys
+    std::set<gtsam::Key> all_available_keys = smoother_keys_set;
+    all_available_keys.insert(new_values_keys_set.begin(), new_values_keys_set.end());
+    
+    LOG(ERROR) << "Checking " << new_factors.size() << " new factors for invalid keys:";
+    std::set<gtsam::Key> all_referenced_keys;
+    std::map<gtsam::Key, std::vector<size_t>> missing_keys_to_factors;
+    
+    for (size_t i = 0; i < new_factors.size(); ++i) {
+      const auto& factor = new_factors[i];
+      if (!factor) continue;
+      
+      for (const auto& key : factor->keys()) {
+        all_referenced_keys.insert(key);
+        if (all_available_keys.find(key) == all_available_keys.end()) {
+          missing_keys_to_factors[key].push_back(i);
+        }
+      }
+    }
+    
+    if (!missing_keys_to_factors.empty()) {
+      LOG(ERROR) << "FOUND " << missing_keys_to_factors.size() << " MISSING KEYS:";
+      for (const auto& [key, factor_indices] : missing_keys_to_factors) {
+        LOG(ERROR) << "  INVALID KEY: " << gtsam::DefaultKeyFormatter(key)
+                   << " referenced by " << factor_indices.size() << " factors: ";
+        for (size_t idx : factor_indices) {
+          LOG(ERROR) << "    Factor[" << idx << "]: ";
+          if (new_factors[idx]) {
+            std::stringstream factor_keys_ss;
+            for (const auto& fk : new_factors[idx]->keys()) {
+              factor_keys_ss << gtsam::DefaultKeyFormatter(fk) << " ";
+            }
+            LOG(ERROR) << "      Keys: " << factor_keys_ss.str();
+          }
+        }
+      }
+    } else {
+      LOG(ERROR) << "NO MISSING KEYS FOUND IN NEW FACTORS (error may be in smoother's existing factors)";
+    }
+    
+    LOG(ERROR) << "All " << all_referenced_keys.size() << " unique keys referenced by new factors:";
+    std::stringstream all_ref_ss;
+    for (const auto& key : all_referenced_keys) {
+      all_ref_ss << gtsam::DefaultKeyFormatter(key) << " ";
+    }
+    LOG(ERROR) << "  " << all_ref_ss.str();
+    
+    LOG(ERROR) << "===== END KEY VALIDATION ANALYSIS =====";
+    
     if (backend_params_.enable_factor_graph_debug_logging_) {
       gtsam::NonlinearFactorGraph combined_graph = smoother_->getFactors();
       combined_graph.push_back(new_factors.begin(), new_factors.end());
@@ -2114,7 +2292,7 @@ void VioBackend::cleanCheiralityLmk(
   VLOG(10) << "Starting delete from new values...";
   bool is_deleted_from_values =
       deleteKeyFromValues(lmk_key, new_values, new_values_cheirality);
-  VLOG(10) << "Finished delete from timestamps.";
+  VLOG(10) << "Finished delete from new values.";
 
   // Delete from new values.
   VLOG(10) << "Starting delete from timestamps...";
@@ -2291,8 +2469,6 @@ void VioBackend::setNoMotionFactorsParams(
   *no_motion_prior_noise = gtsam::noiseModel::Diagonal::Precisions(precisions);
 }
 
-/* --------------------------- PRINTERS ------------------------------------- */
-/// Printers.
 void VioBackend::print() const {
   backend_params_.print();
 
@@ -2389,7 +2565,7 @@ void VioBackend::printSmootherInfo(
     // If we are storing the graph to be deleted, then print extended info
     // besides the slot to be deleted.
     CHECK_GE(debug_info_.graphToBeDeleted.size(), delete_slots.size());
-    for (size_t i = 0u; i < delete_slots.size(); ++i) {
+    for (size_t i = 0u; i < delete_slots.size(); i++) {
       CHECK(debug_info_.graphToBeDeleted.at(i));
       if (print_point_plane_factors) {
         printSelectedFactors(debug_info_.graphToBeDeleted.at(i).get(),

@@ -69,7 +69,7 @@ no_motion_position_precision: 1000
 no_motion_rotation_precision: 10000
 constant_vel_precision: 100
 numOptimize: 1
-nr_states: 25 # number of nodes in horizon.
+nr_states: 30 # number of nodes in horizon.
 # ISAM2GaussNewtonParams: continue updating the linear delta only when
 # changes are above this threshold (default: 0.001)
 wildfire_threshold: 0.001
@@ -122,7 +122,7 @@ kimera:
   # - WNOJ constrains jerk (acceleration derivative) to be white noise
   # - Singer adds exponential decay constraint on acceleration
   # These are ADDITIVE regularization terms - they don't conflict!
-  gp_model_type: 7
+  gp_model_type: 0
   
   # --------------------------------------------------------------------------
   # Qc Noise Model (used by all GP prior types)
@@ -165,7 +165,12 @@ factor_graph_debug_save_dir: "/workspaces/src/debug_factor_graph_logs"
 # Set to 1 to save after every optimization
 # Set to 10 to save every 10th optimization (reduces file count)
 # Set to 0 to disable saving (only logs to console)
-factor_graph_debug_save_interval: 25
+factor_graph_debug_save_interval: 15
+
+# Include SmartStereoProjectionFactors in factor graph debug output (.dot/.g2o)
+# Set to 0 to exclude visual factors from debug files (reduces file size and clutter)
+# Set to 1 to include all factors (default)
+factor_graph_debug_include_smart_factors: 0
 
 # smootherType - select which backend smoother to use:
 # 0: ISAM2 (incremental nonlinear smoother, default)

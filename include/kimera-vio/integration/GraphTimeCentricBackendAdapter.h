@@ -124,6 +124,22 @@ public:
   bool isInitialized() const;
 
   // ========================================================================
+  // PARAMETER MANAGEMENT
+  // ========================================================================
+
+  /**
+   * @brief Create integration parameters from Kimera BackendParams and ImuParams
+   * 
+   * Maps BackendParams fields to KimeraIntegrationParams structure:
+   * - GP motion prior settings (add_gp_motion_priors, gp_model_type, qc vars, etc.)
+   * - IMU parameters (rate, noise, bias random walk)
+   * - Optimization parameters (smoother lag, etc.)
+   * 
+   * @return Populated KimeraIntegrationParams structure
+   */
+  fgo::integration::KimeraIntegrationParams createIntegrationParams() const;
+
+  // ========================================================================
   // STATE MANAGEMENT
   // ========================================================================
 
@@ -364,9 +380,6 @@ private:
   };
   std::vector<BufferedState> non_keyframe_buffer_;
   mutable std::mutex state_buffer_mutex_;
-  
-  // Helper methods
-  fgo::integration::KimeraIntegrationParams createIntegrationParams() const;
 };
 
 } // namespace VIO

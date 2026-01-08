@@ -152,11 +152,11 @@ class BackendParams : public PipelineParams {
   PoseGuessSource pose_guess_source_ = PoseGuessSource::IMU;
   double mono_translation_scale_factor_ = 0.1;
   // Runtime toggle to use Graph Time Centric backend adapter
-  bool use_graph_time_centric = true;
+  bool use_graph_time_centric_ = true;
   
   // Add GP motion priors between consecutive keyframe states (GraphTimeCentric only)
   // Supports multiple GP model types (see gp_model_type)
-  bool add_gp_motion_priors = false;
+  bool add_gp_motion_priors_ = false;
   
   // GP model type - all non-Full types can be combined without interference!
   // 0 = WNOA: White Noise on Acceleration (simplest, uses omega only)
@@ -167,22 +167,22 @@ class BackendParams : public PipelineParams {
   // 5 = WNOA+WNOJ: Both WNOA and WNOJ simultaneously
   // 6 = WNOA+Singer: WNOA plus Singer decay model
   // 7 = WNOA+WNOJ+Singer: All three - maximum smoothing
-  int gp_model_type = 0;  // Default: WNOA
+  int gp_model_type_ = 0;  // Default: WNOA
   
   // Qc variance for GP priors (process noise / trajectory smoothness)
   // Lower values = smoother trajectory, higher values = more flexibility
-  double qc_gp_trans_var = 1.0;   // Translation variance (m^2/s^4)
-  double qc_gp_rot_var = 0.1;     // Rotation variance (rad^2/s^4)
+  double qc_gp_trans_var_ = 1.0;   // Translation variance (m^2/s^4)
+  double qc_gp_rot_var_ = 0.1;     // Rotation variance (rad^2/s^4)
   
   // Singer model acceleration damping (ad matrix diagonal)
   // Controls exponential decay: da/dt = -ad * a + noise
   // Higher = faster decay to zero acceleration
-  double ad_trans = 1.0;          // Translation damping (1/s)
-  double ad_rot = 2.0;            // Rotation damping (1/s)
+  double ad_trans_ = 1.0;          // Translation damping (1/s)
+  double ad_rot_ = 2.0;            // Rotation damping (1/s)
   
   // Full variant parameters (for future WNOJFull/SingerFull)
-  double initial_acc_sigma_trans = 0.5;   // m/s^2
-  double initial_acc_sigma_rot = 0.1;     // rad/s^2
+  double initial_acc_sigma_trans_ = 0.5;   // m/s^2
+  double initial_acc_sigma_rot_ = 0.1;     // rad/s^2
   
   //! Debug params
   // Enable comprehensive factor graph logging when optimization fails
@@ -190,6 +190,7 @@ class BackendParams : public PipelineParams {
   bool enable_factor_graph_debug_logging_ = true;
   std::string factor_graph_debug_save_dir_ = "debug_run_logs";  // Directory for saved files
   int factor_graph_debug_save_interval_ = 1;  // Save after every N optimizations (1 = every time)
+  bool factor_graph_debug_include_smart_factors_ = true;  // Include SmartStereoProjectionFactors in debug output
   int smootherType_ = 2;  // 0: ISAM2, 1: FixedLagSmoother, 2: Hybrid
 };
 

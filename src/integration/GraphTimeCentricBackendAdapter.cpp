@@ -47,10 +47,30 @@ namespace {
   
   class StandaloneParameters : public fgo::core::ParameterInterface {
   public:
-    bool hasParameter(const std::string& name) const override { return string_params_.count(name) > 0; }
-    bool getBool(const std::string& name, bool default_value) override { return default_value; }
-    int getInt(const std::string& name, int default_value) override { return default_value; }
-    double getDouble(const std::string& name, double default_value) override { return default_value; }
+    bool hasParameter(const std::string& name) const override { 
+      return string_params_.count(name) > 0 || 
+             double_params_.count(name) > 0 || 
+             bool_params_.count(name) > 0 ||
+             int_params_.count(name) > 0;
+    }
+    bool getBool(const std::string& name, bool default_value) override { 
+      if (bool_params_.count(name)) {
+        return bool_params_.at(name);
+      }
+      return default_value;
+    }
+    int getInt(const std::string& name, int default_value) override { 
+      if (int_params_.count(name)) {
+        return int_params_.at(name);
+      }
+      return default_value;
+    }
+    double getDouble(const std::string& name, double default_value) override { 
+      if (double_params_.count(name)) {
+        return double_params_.at(name);
+      }
+      return default_value;
+    }
     std::string getString(const std::string& name, const std::string& default_value) override {
       if (string_params_.count(name)) {
         return string_params_.at(name);
@@ -60,9 +80,15 @@ namespace {
     std::vector<double> getDoubleArray(const std::string& name, const std::vector<double>& default_value) override { return default_value; }
     std::vector<int> getIntArray(const std::string& name, const std::vector<int>& default_value) override { return default_value; }
     std::vector<std::string> getStringArray(const std::string& name, const std::vector<std::string>& default_value) override { return default_value; }
-    void setBool(const std::string& name, bool value) override {}
-    void setInt(const std::string& name, int value) override {}
-    void setDouble(const std::string& name, double value) override {}
+    void setBool(const std::string& name, bool value) override {
+      bool_params_[name] = value;
+    }
+    void setInt(const std::string& name, int value) override {
+      int_params_[name] = value;
+    }
+    void setDouble(const std::string& name, double value) override {
+      double_params_[name] = value;
+    }
     void setString(const std::string& name, const std::string& value) override {
       string_params_[name] = value;
     }
@@ -72,6 +98,9 @@ namespace {
     void loadFromYAML(const std::string& filename) override {}
   private:
     std::map<std::string, std::string> string_params_;
+    std::map<std::string, double> double_params_;
+    std::map<std::string, bool> bool_params_;
+    std::map<std::string, int> int_params_;
   };
   
   class StandaloneApp : public fgo::core::ApplicationInterface {
@@ -168,6 +197,13 @@ bool GraphTimeCentricBackendAdapter::initialize() {
     }
     standalone_app_->getParameters().setString("GNSSFGO.Optimizer.smootherType", smootherTypeString);
 
+    // Create integration parameters from Kimera params
+    auto integration_params = createIntegrationParams();
+
+    // Ensure the smoother lag is propagated to the standalone app parameters
+    // so the integration interface picks it up during its own initialization.
+    standalone_app_->getParameters().setDouble("GNSSFGO.Optimizer.smootherLag", integration_params.smoother_lag);
+
     // Create integration interface
     integration_interface_ = std::make_unique<fgo::integration::KimeraIntegrationInterface>(*standalone_app_);
     
@@ -175,8 +211,16 @@ bool GraphTimeCentricBackendAdapter::initialize() {
     // GraphTimeCentric builds incremental updates, adapter passes them to VioBackend's native GTSAM smoother
     // This ensures both standard and GTC pipelines use the same smoother with proper marginalization
     
-    // Create integration parameters from Kimera params
-    auto integration_params = createIntegrationParams();
+    // PRIORITY FIX #1: Correct Smoother Lag Units
+    // Kimera-VIO BackendParams takes nr_states_ as a count of nodes,
+    // but GTSAM FixedLagSmoother interprets it as seconds.
+    // We update the smoother lag to match the calculated seconds.
+    if (vio_backend_smoother_) {
+      vio_backend_smoother_->smootherLag() = integration_params.smoother_lag;
+      LOG(INFO) << "GraphTimeCentricBackendAdapter: Updated smoother lag to " 
+                << integration_params.smoother_lag << "s (" 
+                << backend_params_.nr_states_ << " nodes at 20Hz)";
+    }
     
     // Initialize the interface
     if (!integration_interface_->initialize(integration_params)) {
@@ -199,6 +243,62 @@ bool GraphTimeCentricBackendAdapter::initialize() {
 
 bool GraphTimeCentricBackendAdapter::isInitialized() const {
   return initialized_;
+}
+
+fgo::integration::KimeraIntegrationParams GraphTimeCentricBackendAdapter::createIntegrationParams() const {
+  fgo::integration::KimeraIntegrationParams params;
+  
+  // ========================================================================
+  // SMOOTHER CONFIGURATION
+  // ========================================================================
+  // Convert nr_states (node count) to smoother_lag (seconds)
+  // Assumption: states created at 20Hz keyframe rate
+  const double keyframe_rate_hz = 20.0;
+  params.smoother_lag = backend_params_.nr_states_ / keyframe_rate_hz;
+  params.use_isam2 = (backend_params_.smootherType_ == 0 || backend_params_.smootherType_ == 2);
+  
+  // ========================================================================
+  // IMU PARAMETERS (from ImuParams.yaml via imu_params_)
+  // ========================================================================
+  params.imu_rate = imu_params_.nominal_sampling_time_s_ > 0 
+      ? 1.0 / imu_params_.nominal_sampling_time_s_ 
+      : 200.0;  // Default 200Hz if not specified
+  params.accel_noise_sigma = imu_params_.acc_noise_density_;
+  params.gyro_noise_sigma = imu_params_.gyro_noise_density_;
+  params.accel_bias_rw_sigma = imu_params_.acc_random_walk_;
+  params.gyro_bias_rw_sigma = imu_params_.gyro_random_walk_;
+  params.gravity = imu_params_.n_gravity_;
+  params.imu_preintegration_type = static_cast<int>(imu_params_.imu_preintegration_type_);
+  
+  // ========================================================================
+  // GP MOTION PRIOR CONFIGURATION (from BackendParams.yaml kimera section)
+  // ========================================================================
+  params.use_gp_priors = backend_params_.add_gp_motion_priors_;
+  params.gp_model_type = backend_params_.gp_model_type_;
+  
+  // Note: Qc noise model (qc_gp_trans_var, qc_gp_rot_var) and Singer params
+  // (ad_trans, ad_rot) are passed separately via setGPPriorParams() to match
+  // the visual factors pattern where noise models are set after initialization
+  
+  // ========================================================================
+  // OPTIMIZATION PARAMETERS
+  // ========================================================================
+  params.optimize_on_keyframe = true;
+  params.optimization_period = 0.1;  // seconds between optimizations
+  
+  // ========================================================================
+  // DEBUG PARAMETERS
+  // ========================================================================
+  params.factor_graph_debug_include_smart_factors = backend_params_.factor_graph_debug_include_smart_factors_;
+  
+  LOG(INFO) << "GraphTimeCentricBackendAdapter: Created integration params:";
+  LOG(INFO) << "  - smoother_lag: " << params.smoother_lag << "s (" << backend_params_.nr_states_ << " nodes)";
+  LOG(INFO) << "  - use_gp_priors: " << (params.use_gp_priors ? "true" : "false");
+  LOG(INFO) << "  - gp_model_type: " << params.gp_model_type;
+  LOG(INFO) << "  - imu_rate: " << params.imu_rate << " Hz";
+  LOG(INFO) << "  - imu_preintegration_type: " << params.imu_preintegration_type;
+  
+  return params;
 }
 
 bool GraphTimeCentricBackendAdapter::bufferNonKeyframeState(
@@ -412,43 +512,36 @@ bool GraphTimeCentricBackendAdapter::optimizeGraph() {
     return false;
   }
 
+  if (!vio_backend_smoother_) {
+    LOG(ERROR) << "GraphTimeCentricBackendAdapter: smoother pointer not set, cannot check marginalization";
+    return false;
+  }
+
   fgo::integration::KimeraIntegrationInterface::IncrementalUpdatePacket packet;
   
-  // CRITICAL DEBUG: Log before calling buildIncrementalUpdate
+  LOG(INFO) << "GraphTimeCentricBackendAdapter: calling buildIncrementalUpdate with smoother graph...";
   
-  LOG(INFO) << "GraphTimeCentricBackendAdapter: calling buildIncrementalUpdate...";
-  
-  bool build_result = integration_interface_->buildIncrementalUpdate(&packet);
+  // CRITICAL: Pass smoother graph for marginalization checking
+  // This prevents the "invalid key" crash by checking which factors still exist
+  const gtsam::NonlinearFactorGraph& smoother_graph = vio_backend_smoother_->getFactors();
+  bool build_result = integration_interface_->buildIncrementalUpdate(&packet, &smoother_graph);
   
   if (!build_result) {
     LOG(WARNING) << "GraphTimeCentricBackendAdapter: no incremental update available";
     return false;
   }
 
-  // Debug contents of incremental update before handing to smoother.
+  // Debug contents of incremental update
   LOG(INFO) << "GraphTimeCentricBackendAdapter: incremental update packet - "
             << "factors=" << packet.factors.size()
             << ", values=" << packet.values.size()
             << ", key_timestamps=" << packet.key_timestamps.size()
             << ", delete_slots=" << packet.delete_slots.size();
 
-  if (packet.factors.empty()) {
-    LOG(WARNING) << "GraphTimeCentricBackendAdapter: packet.factors is empty before smoother call";
-  }
-  if (packet.values.empty()) {
-    LOG(WARNING) << "GraphTimeCentricBackendAdapter: packet.values is empty before smoother call";
-  }
-  if (packet.key_timestamps.empty()) {
-    LOG(WARNING) << "GraphTimeCentricBackendAdapter: packet.key_timestamps is empty before smoother call";
-  }
-
   std::map<gtsam::Key, double> timestamps(packet.key_timestamps.begin(),
                                           packet.key_timestamps.end());
 
   Smoother::Result result;
-  
-  // Use delete_slots from the packet - these are SmartFactor slots that need to be replaced
-  // CRITICAL: Without this, old SmartFactors accumulate in ISAM2, causing unbounded graph growth
   gtsam::FactorIndices delete_slots = packet.delete_slots;
 
   bool status = false;
@@ -477,7 +570,7 @@ bool GraphTimeCentricBackendAdapter::optimizeGraph() {
     return false;
   }
 
-  // Mirror VioBackend cheirality recovery: remove offending landmark and retry.
+  // Handle cheirality recovery: remove offending landmark from GTC and retry.
   if (got_cheirality_exception) {
     if (!integration_interface_ || !integration_interface_->getGraph()) {
       LOG(ERROR) << "GraphTimeCentricBackendAdapter: cannot handle cheirality - graph not available";
@@ -485,7 +578,6 @@ bool GraphTimeCentricBackendAdapter::optimizeGraph() {
     }
 
     auto gtc_graph = integration_interface_->getGraph();
-    // The current smoother factors are available from VioBackend's smoother.
     if (!vio_backend_smoother_) {
       LOG(ERROR) << "GraphTimeCentricBackendAdapter: cannot handle cheirality - smoother pointer not set";
       return false;
@@ -516,80 +608,45 @@ bool GraphTimeCentricBackendAdapter::optimizeGraph() {
     LOG(WARNING) << "GraphTimeCentricBackendAdapter: retrying smoother update after cheirality cleanup";
     status = smoother_update_cb_(&result, retry_factors, retry_values, retry_ts_map, retry_delete_slots);
     if (!status) {
-      LOG(ERROR) << "GraphTimeCentricBackendAdapter: cheirality recovery retry failed";
+      LOG(ERROR) << "GraphTimeCentricBackendAdapter: smoother retry failed";
       return false;
     }
-  }
-
-  // UPDATE SMART FACTOR SLOTS (mirrors VioBackend::updateNewSmartFactorsSlots)
-  // After successful optimization, extract slot numbers from ISAM2 result and update tracking
-  if (!packet.new_smart_factor_lmk_ids.empty() && vio_backend_smoother_) {
-    // Access ISAM2Result through VioBackend's smoother pointer
-    // This contains newFactorsIndices which map to slots in the factor graph
-    const gtsam::ISAM2Result& isam_result = vio_backend_smoother_->getISAM2Result();
     
-    // CRITICAL: SmartFactors must be FIRST in packet.factors for correct slot mapping!
-    if (isam_result.newFactorsIndices.size() >= packet.new_smart_factor_lmk_ids.size()) {
-      std::vector<Slot> new_slots;
-      new_slots.reserve(packet.new_smart_factor_lmk_ids.size());
-      
-      // Extract slots for smart factors (they were added first)
-      for (size_t i = 0; i < packet.new_smart_factor_lmk_ids.size(); ++i) {
-        new_slots.push_back(static_cast<Slot>(isam_result.newFactorsIndices[i]));
+    // Retry succeeded, finalize
+    integration_interface_->finalizeIncrementalUpdate();
+    
+    // Update SmartFactor slot tracking with new assignments from ISAM2
+    if (vio_backend_smoother_ && integration_interface_ && integration_interface_->getGraph()) {
+      const gtsam::ISAM2Result& isam_result = vio_backend_smoother_->getISAM2Result();
+      if (!packet.new_smart_factor_lmk_ids.empty() && !isam_result.newFactorsIndices.empty()) {
+        std::vector<int64_t> new_slots;
+        new_slots.reserve(packet.new_smart_factor_lmk_ids.size());
+        for (size_t i = 0; i < packet.new_smart_factor_lmk_ids.size() && i < isam_result.newFactorsIndices.size(); ++i) {
+          new_slots.push_back(static_cast<int64_t>(isam_result.newFactorsIndices[i]));
+        }
+        integration_interface_->getGraph()->updateSmartFactorSlots(
+            packet.new_smart_factor_lmk_ids, new_slots);
       }
-      
-      // Update slot tracking in GraphTimeCentricKimera
-      integration_interface_->updateSmartFactorSlots(
-          packet.new_smart_factor_lmk_ids, new_slots);
-      
-      LOG(INFO) << "GraphTimeCentricBackendAdapter: Updated " << new_slots.size()
-                << " SmartFactor slots in graph";
-    } else {
-      LOG(WARNING) << "GraphTimeCentricBackendAdapter: Mismatch - newFactorsIndices (" 
-                   << isam_result.newFactorsIndices.size() << ") vs SmartFactors (" 
-                   << packet.new_smart_factor_lmk_ids.size() << ")";
     }
-  } else if (!packet.new_smart_factor_lmk_ids.empty() && !vio_backend_smoother_) {
-    LOG(WARNING) << "GraphTimeCentricBackendAdapter: Cannot update SmartFactor slots - smoother pointer not set!";
-  }
-
-  integration_interface_->markIncrementalUpdateConsumed();
-
-  if (!state_timestamps_.empty()) {
-    last_optimization_time_ = state_timestamps_.back();
-  }
-
-  LOG(INFO) << "GraphTimeCentricBackendAdapter: optimization via backend smoother succeeded";
-  
-  // NOTE: State extraction moved to VioBackend::addVisualInertialStateAndOptimize()
-  // after optimization completes. This prevents intermediate state updates during
-  // multi-pass optimization that could corrupt W_Pose_B_lkf_from_state_ used for
-  // next frame's PIM computation.
-  
-  // Save factor graph debug info after each successful optimization (if enabled and interval matches)
-  if (backend_params_.enable_factor_graph_debug_logging_) {
-    optimization_iteration_++;
+  } else if (status) {
+    // Original update succeeded, finalize and update slot tracking
+    integration_interface_->finalizeIncrementalUpdate();
     
-    // Only save if interval is > 0 and iteration matches interval
-    int save_interval = backend_params_.factor_graph_debug_save_interval_;
-    bool should_save = (save_interval > 0) && (optimization_iteration_ % save_interval == 0);
-    
-    if (should_save) {
-      if (integration_interface_->saveFactorGraphDebugInfo(
-              optimization_iteration_, 
-              "after_optimization",
-              backend_params_.factor_graph_debug_save_dir_)) {
-        LOG(INFO) << "GraphTimeCentricBackendAdapter: Saved factor graph debug info (iteration " 
-                  << optimization_iteration_ << ", interval=" << save_interval << ")";
-      } else {
-        LOG(WARNING) << "GraphTimeCentricBackendAdapter: Failed to save factor graph debug info";
+    if (vio_backend_smoother_ && integration_interface_ && integration_interface_->getGraph()) {
+      const gtsam::ISAM2Result& isam_result = vio_backend_smoother_->getISAM2Result();
+      if (!packet.new_smart_factor_lmk_ids.empty() && !isam_result.newFactorsIndices.empty()) {
+        std::vector<int64_t> new_slots;
+        new_slots.reserve(packet.new_smart_factor_lmk_ids.size());
+        for (size_t i = 0; i < packet.new_smart_factor_lmk_ids.size() && i < isam_result.newFactorsIndices.size(); ++i) {
+          new_slots.push_back(static_cast<int64_t>(isam_result.newFactorsIndices[i]));
+        }
+        integration_interface_->getGraph()->updateSmartFactorSlots(
+            packet.new_smart_factor_lmk_ids, new_slots);
       }
-    } else {
-      VLOG(2) << "GraphTimeCentricBackendAdapter: Skipping factor graph save (iteration " 
-              << optimization_iteration_ << ", interval=" << save_interval << ")";
     }
   }
-  
+
+  // Update num_states_ to match handles (simplified: the smoother tracks its own)
   return true;
 }
 
@@ -639,47 +696,6 @@ double GraphTimeCentricBackendAdapter::timestampToSeconds(const Timestamp& times
 
 Timestamp GraphTimeCentricBackendAdapter::secondsToTimestamp(double seconds) const {
   return static_cast<Timestamp>(seconds * 1e9);
-}
-
-fgo::integration::KimeraIntegrationParams GraphTimeCentricBackendAdapter::createIntegrationParams() const {
-  fgo::integration::KimeraIntegrationParams params;
-  
-  params.use_isam2 = true;
-  params.use_gp_priors = backend_params_.addBetweenStereoFactors_;
-  params.optimize_on_keyframe = true;
-  params.smoother_lag = 5.0;
-  
-  // IMU parameters (from ImuParams.yaml, passed through via imu_params_)
-  // This ensures GraphTimeCentric uses identical IMU factor construction as VioBackend
-  params.imu_rate = imu_params_.nominal_sampling_time_s_ > 0 
-      ? 1.0 / imu_params_.nominal_sampling_time_s_ 
-      : 200.0;  // Default 200Hz if not specified
-  params.accel_noise_sigma = imu_params_.acc_noise_density_;
-  params.gyro_noise_sigma = imu_params_.gyro_noise_density_;
-  params.accel_bias_rw_sigma = imu_params_.acc_random_walk_;
-  params.gyro_bias_rw_sigma = imu_params_.gyro_random_walk_;
-  params.gravity = imu_params_.n_gravity_.norm() > 0 ? imu_params_.n_gravity_ : Eigen::Vector3d(0.0, 0.0, -9.81);
-  
-  // IMU preintegration type (from ImuParams.yaml imu_preintegration_type)
-  // This is the key parameter that determines CombinedImuFactor vs ImuFactor+BiasFactor
-  params.imu_preintegration_type = static_cast<int>(imu_params_.imu_preintegration_type_);
-  
-  LOG(INFO) << "GraphTimeCentricBackendAdapter: IMU preintegration type = " 
-            << params.imu_preintegration_type << " (0=Combined, 1=Regular+BiasFactor)";
-  
-  // GP motion prior configuration (Qc noise model is passed separately via setGPPriorParams)
-  params.use_gp_priors = backend_params_.add_gp_motion_priors;
-  params.gp_model_type = backend_params_.gp_model_type;
-  
-  params.optimization_period = 0.1;
-  
-  LOG(INFO) << "Created integration params: use_isam2=" << params.use_isam2
-            << ", use_gp_priors=" << params.use_gp_priors
-            << ", gp_model_type=" << params.gp_model_type
-            << ", smoother_lag=" << params.smoother_lag
-            << ", imu_rate=" << params.imu_rate;
-  
-  return params;
 }
 
 // ========================================================================
