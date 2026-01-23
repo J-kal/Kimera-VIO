@@ -178,6 +178,11 @@ bool BackendParams::parseYAMLVioBackendParams(const YamlParser& yaml_parser) {
   yaml_parser.getYamlParam("factor_graph_debug_save_interval", &factor_graph_debug_save_interval_);
   yaml_parser.getYamlParam("factor_graph_debug_include_smart_factors", &factor_graph_debug_include_smart_factors_);
   
+  // Smoother lag calculation (optional, default is 5.0 Hz if not specified)
+  if (yaml_parser.hasParam("keyframe_rate_hz")) {
+    yaml_parser.getYamlParam("keyframe_rate_hz", &keyframe_rate_hz_);
+  }
+  
   // GP motion priors (GraphTimeCentric only) - read from kimera namespace
   yaml_parser.getNestedYamlParam("kimera", "add_gp_motion_priors", &add_gp_motion_priors_);
   yaml_parser.getNestedYamlParam("kimera", "gp_model_type", &gp_model_type_);
@@ -189,6 +194,8 @@ bool BackendParams::parseYAMLVioBackendParams(const YamlParser& yaml_parser) {
   // Full variant parameters
   yaml_parser.getNestedYamlParam("kimera", "initial_acc_sigma_trans", &initial_acc_sigma_trans_);
   yaml_parser.getNestedYamlParam("kimera", "initial_acc_sigma_rot", &initial_acc_sigma_rot_);
+  // Omega measurement prior sigma
+  yaml_parser.getNestedYamlParam("kimera", "omega_measurement_sigma", &omega_measurement_sigma_);
 
   return true;
 }
@@ -235,6 +242,7 @@ bool BackendParams::equalsVioBackendParams(const BackendParams& vp2,
       (fabs(mono_translation_scale_factor_ -
             vp2.mono_translation_scale_factor_) <= tol) &&
       (use_graph_time_centric_ == vp2.use_graph_time_centric_) &&
+      (fabs(keyframe_rate_hz_ - vp2.keyframe_rate_hz_) <= tol) &&
       (add_gp_motion_priors_ == vp2.add_gp_motion_priors_) &&
       (gp_model_type_ == vp2.gp_model_type_) &&
       (fabs(qc_gp_trans_var_ - vp2.qc_gp_trans_var_) <= tol) &&
@@ -243,6 +251,7 @@ bool BackendParams::equalsVioBackendParams(const BackendParams& vp2,
       (fabs(ad_rot_ - vp2.ad_rot_) <= tol) &&
       (fabs(initial_acc_sigma_trans_ - vp2.initial_acc_sigma_trans_) <= tol) &&
       (fabs(initial_acc_sigma_rot_ - vp2.initial_acc_sigma_rot_) <= tol) &&
+      (fabs(omega_measurement_sigma_ - vp2.omega_measurement_sigma_) <= tol) &&
       (smootherType_ == vp2.smootherType_) &&
       (enable_factor_graph_debug_logging_ == vp2.enable_factor_graph_debug_logging_) &&
       (factor_graph_debug_save_dir_ == vp2.factor_graph_debug_save_dir_) &&
@@ -323,6 +332,8 @@ void BackendParams::printVioBackendParams() const {
       mono_translation_scale_factor_,
       "Use Graph Time Centric",
       use_graph_time_centric_,
+      "Keyframe Rate Hz",
+      keyframe_rate_hz_,
       "Add GP Motion Priors",
       add_gp_motion_priors_,
       "GP Model Type",
@@ -339,6 +350,8 @@ void BackendParams::printVioBackendParams() const {
       initial_acc_sigma_trans_,
       "Initial Acc Sigma Rot",
       initial_acc_sigma_rot_,
+      "Omega Measurement Sigma",
+      omega_measurement_sigma_,
       "Smoother Type",
       smootherType_,
       "Enable Factor Graph Debug Logging",

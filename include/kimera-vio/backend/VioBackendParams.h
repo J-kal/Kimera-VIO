@@ -184,6 +184,17 @@ class BackendParams : public PipelineParams {
   double initial_acc_sigma_trans_ = 0.5;   // m/s^2
   double initial_acc_sigma_rot_ = 0.1;     // rad/s^2
   
+  // Omega measurement prior sigma (for GP motion priors)
+  // Controls the tightness of angular velocity measurement constraints
+  // Lower = tighter constraint (more trust in gyro), Higher = looser constraint
+  // Typical range: 0.005-0.05 rad/s
+  double omega_measurement_sigma_ = 0.005;  // rad/s (conservative gyro noise at keyframe rate)
+  
+  // Smoother lag calculation parameter
+  // Expected average keyframe rate in Hz (used to convert nr_states to smoother lag in seconds)
+  // Typical values: 5.0 for ~0.2s keyframe intervals, 10.0 for ~0.1s intervals
+  double keyframe_rate_hz_ = 5.0;  // Default: 5Hz (0.2s keyframe interval)
+  
   //! Debug params
   // Enable comprehensive factor graph logging when optimization fails
   // Outputs factor keys, .g2o files, and .dot graph visualizations

@@ -219,7 +219,8 @@ bool GraphTimeCentricBackendAdapter::initialize() {
       vio_backend_smoother_->smootherLag() = integration_params.smoother_lag;
       LOG(INFO) << "GraphTimeCentricBackendAdapter: Updated smoother lag to " 
                 << integration_params.smoother_lag << "s (" 
-                << backend_params_.nr_states_ << " nodes at 20Hz)";
+                << backend_params_.nr_states_ << " nodes at " 
+                << backend_params_.keyframe_rate_hz_ << "Hz)";
     }
     
     // Initialize the interface
@@ -252,9 +253,8 @@ fgo::integration::KimeraIntegrationParams GraphTimeCentricBackendAdapter::create
   // SMOOTHER CONFIGURATION
   // ========================================================================
   // Convert nr_states (node count) to smoother_lag (seconds)
-  // Assumption: states created at 20Hz keyframe rate
-  const double keyframe_rate_hz = 20.0;
-  params.smoother_lag = backend_params_.nr_states_ / keyframe_rate_hz;
+  // Uses keyframe_rate_hz from BackendParams.yaml
+  params.smoother_lag = backend_params_.nr_states_ / backend_params_.keyframe_rate_hz_;
   params.use_isam2 = (backend_params_.smootherType_ == 0 || backend_params_.smootherType_ == 2);
   
   // ========================================================================
@@ -275,6 +275,7 @@ fgo::integration::KimeraIntegrationParams GraphTimeCentricBackendAdapter::create
   // ========================================================================
   params.use_gp_priors = backend_params_.add_gp_motion_priors_;
   params.gp_model_type = backend_params_.gp_model_type_;
+  params.omega_measurement_sigma = backend_params_.omega_measurement_sigma_;
   
   // Note: Qc noise model (qc_gp_trans_var, qc_gp_rot_var) and Singer params
   // (ad_trans, ad_rot) are passed separately via setGPPriorParams() to match

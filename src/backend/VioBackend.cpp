@@ -1746,12 +1746,37 @@ bool VioBackend::updateSmoother(Smoother::Result* result,
         LOG(INFO) << "    " << gtsam::DefaultKeyFormatter(kv.key) << " has timestamp";
       }
     }
-    LOG(INFO) << "  current smoother keys:";
+    // LOG(INFO) << "  current smoother keys:";
     gtsam::Values smoother_values = smoother_->calculateEstimate();
-    for (const auto& kv : smoother_values) {
-      LOG(INFO) << "    " << gtsam::DefaultKeyFormatter(kv.key);
-    }
+    // for (const auto& kv : smoother_values) {
+    //   LOG(INFO) << "    " << gtsam::DefaultKeyFormatter(kv.key);
+    // }
     LOG(INFO) << "  === END DEBUG ===";
+    
+    // BEFORE update: log what timestamps are in the smoother
+    auto pre_timestamps = smoother_->timestamps();
+    if (!pre_timestamps.empty()) {
+      double max_ts = -1.0, min_ts = 1e15;
+      for (const auto& kv : pre_timestamps) {
+        max_ts = std::max(max_ts, kv.second);
+        min_ts = std::min(min_ts, kv.second);
+      }
+      LOG(INFO) << "VioBackend: BEFORE update - smoother has " << pre_timestamps.size() 
+                << " timestamps, range=[" << std::fixed << std::setprecision(6) 
+                << min_ts << ", " << max_ts << "], span=" << (max_ts - min_ts) << "s";
+    }
+    
+    // Log what timestamps we're ADDING in this update
+    if (!timestamps.empty()) {
+      double max_new_ts = -1.0, min_new_ts = 1e15;
+      for (const auto& kv : timestamps) {
+        max_new_ts = std::max(max_new_ts, kv.second);
+        min_new_ts = std::min(min_new_ts, kv.second);
+      }
+      LOG(INFO) << "VioBackend: ADDING " << timestamps.size() << " timestamps, range=["
+                << std::fixed << std::setprecision(6) << min_new_ts << ", " 
+                << max_new_ts << "], span=" << (max_new_ts - min_new_ts) << "s";
+    }
     
     *result =
         smoother_->update(new_factors, new_values, timestamps, delete_slots);
@@ -1759,6 +1784,18 @@ bool VioBackend::updateSmoother(Smoother::Result* result,
     
     // Log smoother size after update to verify marginalization
     gtsam::Values post_update_values = smoother_->calculateEstimate();
+    auto post_timestamps = smoother_->timestamps();
+    double max_ts_after = -1.0, min_ts_after = 1e15;
+    if (!post_timestamps.empty()) {
+      for (const auto& kv : post_timestamps) {
+        max_ts_after = std::max(max_ts_after, kv.second);
+        min_ts_after = std::min(min_ts_after, kv.second);
+      }
+    }
+    LOG(INFO) << "VioBackend: AFTER update - smoother has " << post_timestamps.size()
+              << " timestamps, range=[" << std::fixed << std::setprecision(6)
+              << min_ts_after << ", " << max_ts_after << "], span=" 
+              << (max_ts_after - min_ts_after) << "s";
     LOG(INFO) << "VioBackend: Smoother Update - "
               << "GraphSize=" << smoother_->getFactors().size()
               << ", Variables=" << smoother_->timestamps().size()
@@ -1833,15 +1870,25 @@ bool VioBackend::updateSmoother(Smoother::Result* result,
     // Add priors on all variables to fix indeterminant linear system
     gtsam::Values values = smoother_->calculateEstimate();
 
-    // Add priors on keys with these prefixes (pose, imu bias, velocity)
+    // Add priors on keys with these prefixes (pose, imu bias, velocity, omega)
+    // CRITICAL: Include 'w' (omega) if GP priors are enabled
     std::vector<unsigned char> key_prefixes_to_prior = {'x', 'b', 'v'};
+    if (backend_params_.add_gp_motion_priors_) {
+      key_prefixes_to_prior.push_back('w');  // Angular velocity keys from GP priors
+    }
     gtsam::Symbol first_key = values.keys().at(0);
     gtsam::KeyVector prior_keys;
     for (const auto& prefix : key_prefixes_to_prior) {
-      prior_keys.push_back(gtsam::Symbol(prefix, symb.index()));
-      prior_keys.push_back(gtsam::Symbol(prefix, first_key.index()));
+      gtsam::Key key_at_failure = gtsam::Symbol(prefix, symb.index());
+      gtsam::Key key_at_first = gtsam::Symbol(prefix, first_key.index());
+      // Only add if the key exists in values (omega keys may not exist if GP priors off)
+      if (values.exists(key_at_failure)) {
+        prior_keys.push_back(key_at_failure);
+      }
+      if (values.exists(key_at_first)) {
+        prior_keys.push_back(key_at_first);
+      }
     }
-    CHECK_EQ(prior_keys.size(), 6u);
     gtsam::NonlinearFactorGraph nfg;
 
     // Only add priors on first state and the state nearest the failure
@@ -1880,6 +1927,18 @@ bool VioBackend::updateSmoother(Smoother::Result* result,
               gtsam::noiseModel::Diagonal::Sigmas(sigmas);
           nfg.emplace_shared<gtsam::PriorFactor<gtsam::Vector3>>(
               key, vel, noise);
+          break;
+        }
+        case 'w': {
+          // Omega (angular velocity) from GP motion priors
+          // Use gyroscope measurement noise as prior uncertainty
+          gtsam::Vector3 omega = values.at<gtsam::Vector3>(key);
+          gtsam::Vector3 sigmas;
+          sigmas.setConstant(0.01);  // Conservative sigma for angular velocity (rad/s)
+          gtsam::SharedNoiseModel noise =
+              gtsam::noiseModel::Diagonal::Sigmas(sigmas);
+          nfg.emplace_shared<gtsam::PriorFactor<gtsam::Vector3>>(
+              key, omega, noise);
           break;
         }
         default: {
