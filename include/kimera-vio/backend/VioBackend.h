@@ -391,7 +391,10 @@ class VioBackend {
       gtsam::SmartStereoProjectionParams* smart_factors_params,
       gtsam::SharedNoiseModel* no_motion_prior_noise,
       gtsam::SharedNoiseModel* zero_velocity_prior_noise,
-      gtsam::SharedNoiseModel* constant_velocity_prior_noise);
+      gtsam::SharedNoiseModel* constant_velocity_prior_noise,
+      gtsam::SharedNoiseModel* gp_qc_model = nullptr,
+      gtsam::Matrix6* gp_ad_matrix = nullptr,
+      gtsam::SharedNoiseModel* gp_acc_prior_noise = nullptr);
 
   void setSmartStereoFactorsNoiseModel(const double& smart_noise_sigma,
                                        gtsam::SharedNoiseModel* smart_noise);
@@ -407,6 +410,25 @@ class VioBackend {
   void setNoMotionFactorsParams(const double& rotation_precision,
                                 const double& position_precision,
                                 gtsam::SharedNoiseModel* no_motion_prior_noise);
+
+  // Set parameters for GP motion priors (GraphTimeCentric only)
+  void setGPMotionPriorParams(
+      const BackendParams& vio_params,
+      gtsam::SharedNoiseModel* gp_qc_model,
+      gtsam::Matrix6* gp_ad_matrix,
+      gtsam::SharedNoiseModel* gp_acc_prior_noise);
+
+  void setGPQcNoiseModel(const double& qc_trans_var,
+                         const double& qc_rot_var,
+                         gtsam::SharedNoiseModel* gp_qc_model);
+
+  void setGPAdMatrix(const double& ad_trans,
+                     const double& ad_rot,
+                     gtsam::Matrix6* gp_ad_matrix);
+
+  void setGPAccPriorNoise(const double& acc_sigma_trans,
+                          const double& acc_sigma_rot,
+                          gtsam::SharedNoiseModel* gp_acc_prior_noise);
 
   /// Private printers.
   void print() const;

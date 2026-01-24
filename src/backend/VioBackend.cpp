@@ -123,48 +123,16 @@ VioBackend::VioBackend(const gtsam::Pose3& B_Pose_leftCamRect,
   smoother_ = std::make_unique<Smoother>(backend_params.nr_states_, lmParams);
 #endif
 
-  // Set parameters for all factors.
+  // Set parameters for all factors (includes GP motion priors if enabled)
   setFactorsParams(backend_params,
                    &smart_noise_,
                    &smart_factors_params_,
                    &no_motion_prior_noise_,
                    &zero_velocity_prior_noise_,
-                   &constant_velocity_prior_noise_);
-
-  // Initialize GP motion prior parameters (GraphTimeCentric only)
-  // This follows the same pattern as smart_noise_ - created here, passed to adapter at runtime
-  if (backend_params.add_gp_motion_priors_) {
-    // Qc noise model (used by all GP prior types)
-    gtsam::Vector6 qc_variances;
-    qc_variances << backend_params.qc_gp_trans_var_, backend_params.qc_gp_trans_var_, 
-                    backend_params.qc_gp_trans_var_, backend_params.qc_gp_rot_var_,
-                    backend_params.qc_gp_rot_var_, backend_params.qc_gp_rot_var_;
-    gp_qc_model_ = gtsam::noiseModel::Diagonal::Variances(qc_variances);
-    
-    // Singer model ad matrix (acceleration damping)
-    // Diagonal matrix: [ad_trans, ad_trans, ad_trans, ad_rot, ad_rot, ad_rot]
-    gp_ad_matrix_ = gtsam::Matrix6::Zero();
-    gp_ad_matrix_(0, 0) = backend_params.ad_trans_;
-    gp_ad_matrix_(1, 1) = backend_params.ad_trans_;
-    gp_ad_matrix_(2, 2) = backend_params.ad_trans_;
-    gp_ad_matrix_(3, 3) = backend_params.ad_rot_;
-    gp_ad_matrix_(4, 4) = backend_params.ad_rot_;
-    gp_ad_matrix_(5, 5) = backend_params.ad_rot_;
-    
-    // Initial acceleration state prior (for future Full variants)
-    gtsam::Vector6 acc_sigmas;
-    acc_sigmas << backend_params.initial_acc_sigma_trans_, backend_params.initial_acc_sigma_trans_,
-                  backend_params.initial_acc_sigma_trans_, backend_params.initial_acc_sigma_rot_,
-                  backend_params.initial_acc_sigma_rot_, backend_params.initial_acc_sigma_rot_;
-    gp_acc_prior_noise_ = gtsam::noiseModel::Diagonal::Sigmas(acc_sigmas);
-    
-    LOG(INFO) << "VioBackend: GP motion prior params initialized - "
-              << "qc_trans=" << backend_params.qc_gp_trans_var_
-              << ", qc_rot=" << backend_params.qc_gp_rot_var_
-              << ", ad_trans=" << backend_params.ad_trans_
-              << ", ad_rot=" << backend_params.ad_rot_
-              << ", gp_model_type=" << backend_params.gp_model_type_;
-  }
+                   &constant_velocity_prior_noise_,
+                   &gp_qc_model_,
+                   &gp_ad_matrix_,
+                   &gp_acc_prior_noise_);
 
   // Reset debug info.
   resetDebugInfo(&debug_info_);
@@ -178,6 +146,7 @@ VioBackend::VioBackend(const gtsam::Pose3& B_Pose_leftCamRect,
   
   if (backend_params_.use_graph_time_centric_) {
     LOG(INFO) << "Initializing GraphTimeCentric adapter...";
+    
     graph_time_centric_adapter_ =
         std::make_unique<GraphTimeCentricBackendAdapter>(
             backend_params_, imu_params_,
@@ -2455,12 +2424,16 @@ void VioBackend::setFactorsParams(
     gtsam::SmartStereoProjectionParams* smart_factors_params,
     gtsam::SharedNoiseModel* no_motion_prior_noise,
     gtsam::SharedNoiseModel* zero_velocity_prior_noise,
-    gtsam::SharedNoiseModel* constant_velocity_prior_noise) {
+    gtsam::SharedNoiseModel* constant_velocity_prior_noise,
+    gtsam::SharedNoiseModel* gp_qc_model,
+    gtsam::Matrix6* gp_ad_matrix,
+    gtsam::SharedNoiseModel* gp_acc_prior_noise) {
   CHECK_NOTNULL(smart_noise);
   CHECK_NOTNULL(smart_factors_params);
   CHECK_NOTNULL(no_motion_prior_noise);
   CHECK_NOTNULL(zero_velocity_prior_noise);
   CHECK_NOTNULL(constant_velocity_prior_noise);
+  
   setSmartStereoFactorsNoiseModel(vio_params.smartNoiseSigma_, smart_noise);
   setSmartStereoFactorsParams(vio_params.rankTolerance_,
                               vio_params.landmarkDistanceThreshold_,
@@ -2483,6 +2456,83 @@ void VioBackend::setFactorsParams(
   constant_velocity_precisions.setConstant(vio_params.constant_vel_precision_);
   *constant_velocity_prior_noise =
       gtsam::noiseModel::Diagonal::Precisions(constant_velocity_precisions);
+  
+  // GP motion prior settings (GraphTimeCentric only)
+  if (vio_params.use_graph_time_centric_ && vio_params.add_gp_motion_priors_) {
+    CHECK_NOTNULL(gp_qc_model);
+    CHECK_NOTNULL(gp_ad_matrix);
+    CHECK_NOTNULL(gp_acc_prior_noise);
+    
+    setGPMotionPriorParams(vio_params,
+                           gp_qc_model,
+                           gp_ad_matrix,
+                           gp_acc_prior_noise);
+  }
+}
+
+void VioBackend::setGPMotionPriorParams(
+    const BackendParams& vio_params,
+    gtsam::SharedNoiseModel* gp_qc_model,
+    gtsam::Matrix6* gp_ad_matrix,
+    gtsam::SharedNoiseModel* gp_acc_prior_noise) {
+  CHECK_NOTNULL(gp_qc_model);
+  CHECK_NOTNULL(gp_ad_matrix);
+  CHECK_NOTNULL(gp_acc_prior_noise);
+  
+  setGPQcNoiseModel(vio_params.qc_gp_trans_var_,
+                    vio_params.qc_gp_rot_var_,
+                    gp_qc_model);
+  
+  setGPAdMatrix(vio_params.ad_trans_,
+                vio_params.ad_rot_,
+                gp_ad_matrix);
+  
+  setGPAccPriorNoise(vio_params.initial_acc_sigma_trans_,
+                     vio_params.initial_acc_sigma_rot_,
+                     gp_acc_prior_noise);
+  
+  LOG(INFO) << "VioBackend: GP motion prior params initialized - "
+            << "qc_trans=" << vio_params.qc_gp_trans_var_
+            << ", qc_rot=" << vio_params.qc_gp_rot_var_
+            << ", ad_trans=" << vio_params.ad_trans_
+            << ", ad_rot=" << vio_params.ad_rot_
+            << ", gp_model_type=" << vio_params.gp_model_type_;
+}
+
+void VioBackend::setGPQcNoiseModel(
+    const double& qc_trans_var,
+    const double& qc_rot_var,
+    gtsam::SharedNoiseModel* gp_qc_model) {
+  CHECK_NOTNULL(gp_qc_model);
+  gtsam::Vector6 qc_variances;
+  qc_variances << qc_trans_var, qc_trans_var, qc_trans_var,
+                  qc_rot_var, qc_rot_var, qc_rot_var;
+  *gp_qc_model = gtsam::noiseModel::Diagonal::Variances(qc_variances);
+}
+
+void VioBackend::setGPAdMatrix(
+    const double& ad_trans,
+    const double& ad_rot,
+    gtsam::Matrix6* gp_ad_matrix) {
+  CHECK_NOTNULL(gp_ad_matrix);
+  *gp_ad_matrix = gtsam::Matrix6::Zero();
+  (*gp_ad_matrix)(0, 0) = ad_trans;
+  (*gp_ad_matrix)(1, 1) = ad_trans;
+  (*gp_ad_matrix)(2, 2) = ad_trans;
+  (*gp_ad_matrix)(3, 3) = ad_rot;
+  (*gp_ad_matrix)(4, 4) = ad_rot;
+  (*gp_ad_matrix)(5, 5) = ad_rot;
+}
+
+void VioBackend::setGPAccPriorNoise(
+    const double& acc_sigma_trans,
+    const double& acc_sigma_rot,
+    gtsam::SharedNoiseModel* gp_acc_prior_noise) {
+  CHECK_NOTNULL(gp_acc_prior_noise);
+  gtsam::Vector6 acc_sigmas;
+  acc_sigmas << acc_sigma_trans, acc_sigma_trans, acc_sigma_trans,
+                acc_sigma_rot, acc_sigma_rot, acc_sigma_rot;
+  *gp_acc_prior_noise = gtsam::noiseModel::Diagonal::Sigmas(acc_sigmas);
 }
 
 void VioBackend::setSmartStereoFactorsNoiseModel(
