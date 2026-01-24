@@ -202,6 +202,18 @@ class BackendParams : public PipelineParams {
   std::string factor_graph_debug_save_dir_ = "debug_run_logs";  // Directory for saved files
   int factor_graph_debug_save_interval_ = 1;  // Save after every N optimizations (1 = every time)
   bool factor_graph_debug_include_smart_factors_ = true;  // Include SmartStereoProjectionFactors in debug output
+  
+  // Enable debug logging of smoother info (calls printSmootherInfo)
+  // Useful for debugging optimization issues
+  bool debug_smoother_ = false;
+
+  // Control what types of factors to print in debug output
+  bool print_smart_factors_ = true;  // There are a lot of these!
+  bool print_point_plane_factors_ = true;
+  bool print_plane_priors_ = true;
+  bool print_point_priors_ = true;
+  bool print_linear_container_factors_ = true;
+  
   int smootherType_ = 2;  // 0: ISAM2, 1: FixedLagSmoother, 2: Hybrid
 };
 

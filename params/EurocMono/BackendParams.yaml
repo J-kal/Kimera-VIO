@@ -95,7 +95,7 @@ pose_guess_source: 0
 mono_translation_scale_factor: 0.1
 
 # GRAPH TIME CENTRIC ADAPTER ################################################
-use_graph_time_centric: 0
+use_graph_time_centric: 1
 
 # Kimera-specific parameters for GraphTimeCentric (novel features not in standard VioBackend)
 kimera:
@@ -200,4 +200,18 @@ factor_graph_debug_include_smart_factors: 0
 # 3: Dogleg (batch nonlinear optimizer)
 # NOTE: Not all options may be supported in every build.
 smootherType: 0
+
+# DEBUG OUTPUT CONTROL ########################################################
+# Control debug printing behavior for smoother diagnostics
+# Enable verbose smoother debugging (calls printSmootherInfo)
+debug_smoother: 0
+
+# Control which factor types are printed in debug output
+# Set to 0 to suppress printing, 1 to enable
+# Note: SmartFactors are very numerous and can produce large logs
+print_smart_factors: 0
+print_point_plane_factors: 1
+print_plane_priors: 1
+print_point_priors: 1
+print_linear_container_factors: 1
 

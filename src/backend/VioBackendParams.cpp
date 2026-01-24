@@ -178,6 +178,14 @@ bool BackendParams::parseYAMLVioBackendParams(const YamlParser& yaml_parser) {
   yaml_parser.getYamlParam("factor_graph_debug_save_interval", &factor_graph_debug_save_interval_);
   yaml_parser.getYamlParam("factor_graph_debug_include_smart_factors", &factor_graph_debug_include_smart_factors_);
   
+  // Debug output control parameters
+  yaml_parser.getYamlParam("debug_smoother", &debug_smoother_);
+  yaml_parser.getYamlParam("print_smart_factors", &print_smart_factors_);
+  yaml_parser.getYamlParam("print_point_plane_factors", &print_point_plane_factors_);
+  yaml_parser.getYamlParam("print_plane_priors", &print_plane_priors_);
+  yaml_parser.getYamlParam("print_point_priors", &print_point_priors_);
+  yaml_parser.getYamlParam("print_linear_container_factors", &print_linear_container_factors_);
+  
   // Smoother lag calculation (optional, default is 5.0 Hz if not specified)
   if (yaml_parser.hasParam("keyframe_rate_hz")) {
     yaml_parser.getYamlParam("keyframe_rate_hz", &keyframe_rate_hz_);
@@ -256,7 +264,13 @@ bool BackendParams::equalsVioBackendParams(const BackendParams& vp2,
       (enable_factor_graph_debug_logging_ == vp2.enable_factor_graph_debug_logging_) &&
       (factor_graph_debug_save_dir_ == vp2.factor_graph_debug_save_dir_) &&
       (factor_graph_debug_save_interval_ == vp2.factor_graph_debug_save_interval_) &&
-      (factor_graph_debug_include_smart_factors_ == vp2.factor_graph_debug_include_smart_factors_);
+      (factor_graph_debug_include_smart_factors_ == vp2.factor_graph_debug_include_smart_factors_) &&
+      (debug_smoother_ == vp2.debug_smoother_) &&
+      (print_smart_factors_ == vp2.print_smart_factors_) &&
+      (print_point_plane_factors_ == vp2.print_point_plane_factors_) &&
+      (print_plane_priors_ == vp2.print_plane_priors_) &&
+      (print_point_priors_ == vp2.print_point_priors_) &&
+      (print_linear_container_factors_ == vp2.print_linear_container_factors_);
 }
 
 void BackendParams::printVioBackendParams() const {
@@ -361,7 +375,19 @@ void BackendParams::printVioBackendParams() const {
       "Factor Graph Debug Save Interval",
       factor_graph_debug_save_interval_,
       "Factor Graph Debug Include Smart Factors",
-      factor_graph_debug_include_smart_factors_);
+      factor_graph_debug_include_smart_factors_,
+      "Debug Smoother",
+      debug_smoother_,
+      "Print Smart Factors",
+      print_smart_factors_,
+      "Print Point Plane Factors",
+      print_point_plane_factors_,
+      "Print Plane Priors",
+      print_plane_priors_,
+      "Print Point Priors",
+      print_point_priors_,
+      "Print Linear Container Factors",
+      print_linear_container_factors_);
   LOG(INFO) << out.str();
   LOG(INFO) << "** Backend Iinitialization Parameters **\n"
             << "initial_ground_truth_state_: ";

@@ -2635,11 +2635,12 @@ void VioBackend::printSmootherInfo(
   CHECK_NOTNULL(which_graph);
   CHECK_NOTNULL(graph);
 
-  static constexpr bool print_smart_factors = true;  // There a lot of these!
-  static constexpr bool print_point_plane_factors = true;
-  static constexpr bool print_plane_priors = true;
-  static constexpr bool print_point_priors = true;
-  static constexpr bool print_linear_container_factors = true;
+  // Use debug print flags from backend_params_ (controllable via YAML)
+  const bool print_smart_factors = backend_params_.print_smart_factors_;
+  const bool print_point_plane_factors = backend_params_.print_point_plane_factors_;
+  const bool print_plane_priors = backend_params_.print_plane_priors_;
+  const bool print_point_priors = backend_params_.print_point_priors_;
+  const bool print_linear_container_factors = backend_params_.print_linear_container_factors_;
   ////////////////////// Print all factors.
   ///////////////////////////////////////
   LOG(INFO) << "Nr of factors in graph " + *which_graph << ": " << graph->size()
