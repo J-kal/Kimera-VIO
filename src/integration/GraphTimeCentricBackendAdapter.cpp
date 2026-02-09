@@ -210,18 +210,7 @@ bool GraphTimeCentricBackendAdapter::initialize() {
     // NOTE: Optimization happens via smoother_update_cb_ callback to VioBackend::updateSmoother()
     // GraphTimeCentric builds incremental updates, adapter passes them to VioBackend's native GTSAM smoother
     // This ensures both standard and GTC pipelines use the same smoother with proper marginalization
-    
-    // PRIORITY FIX #1: Correct Smoother Lag Units
-    // Kimera-VIO BackendParams takes nr_states_ as a count of nodes,
-    // but GTSAM FixedLagSmoother interprets it as seconds.
-    // We update the smoother lag to match the calculated seconds.
-    if (vio_backend_smoother_) {
-      vio_backend_smoother_->smootherLag() = integration_params.smoother_lag;
-      LOG(INFO) << "GraphTimeCentricBackendAdapter: Updated smoother lag to " 
-                << integration_params.smoother_lag << "s (" 
-                << backend_params_.nr_states_ << " nodes at " 
-                << backend_params_.keyframe_rate_hz_ << "Hz)";
-    }
+    // Smoother lag is now correctly set during VioBackend smoother initialization
     
     // Initialize the interface
     if (!integration_interface_->initialize(integration_params)) {
@@ -616,6 +605,16 @@ bool GraphTimeCentricBackendAdapter::optimizeGraph() {
     // Retry succeeded, finalize
     integration_interface_->finalizeIncrementalUpdate();
     
+    // Update marginalization tracking
+    if (vio_backend_smoother_) {
+      auto current_timestamps = vio_backend_smoother_->timestamps();
+      std::set<gtsam::Key> current_keys;
+      for (const auto& kv : current_timestamps) {
+        current_keys.insert(kv.first);
+      }
+      integration_interface_->updateMarginalizedKeys(current_keys);
+    }
+    
     // Update SmartFactor slot tracking with new assignments from ISAM2
     if (vio_backend_smoother_ && integration_interface_ && integration_interface_->getGraph()) {
       const gtsam::ISAM2Result& isam_result = vio_backend_smoother_->getISAM2Result();
@@ -632,6 +631,16 @@ bool GraphTimeCentricBackendAdapter::optimizeGraph() {
   } else if (status) {
     // Original update succeeded, finalize and update slot tracking
     integration_interface_->finalizeIncrementalUpdate();
+    
+    // Update marginalization tracking
+    if (vio_backend_smoother_) {
+      auto current_timestamps = vio_backend_smoother_->timestamps();
+      std::set<gtsam::Key> current_keys;
+      for (const auto& kv : current_timestamps) {
+        current_keys.insert(kv.first);
+      }
+      integration_interface_->updateMarginalizedKeys(current_keys);
+    }
     
     if (vio_backend_smoother_ && integration_interface_ && integration_interface_->getGraph()) {
       const gtsam::ISAM2Result& isam_result = vio_backend_smoother_->getISAM2Result();

@@ -47,7 +47,7 @@ void BackendParams::setIsam2Params(const BackendParams& vio_params,
   isam_param->cacheLinearizedFactors = true;
   isam_param->relinearizeThreshold = vio_params.relinearizeThreshold_;
   isam_param->relinearizeSkip = vio_params.relinearizeSkip_;
-  isam_param->findUnusedFactorSlots = true;
+  isam_param->findUnusedFactorSlots = false; //can turn this off 
   // isam_param->enablePartialRelinearizationCheck = true;
   isam_param->evaluateNonlinearError = false;  // only for debugging
   isam_param->enableDetailedResults = false;     // only for debugging.

@@ -114,13 +114,24 @@ VioBackend::VioBackend(const gtsam::Pose3& B_Pose_leftCamRect,
   gtsam::ISAM2Params isam_param;
   BackendParams::setIsam2Params(backend_params, &isam_param);
 
-  smoother_ = std::make_unique<Smoother>(backend_params.nr_states_, isam_param);
+  // Convert nr_states (node count) to smoother lag (seconds)
+  // This matches the GraphTimeCentric implementation and fixes the units mismatch
+  double smoother_lag_seconds = backend_params.nr_states_ / backend_params.keyframe_rate_hz_;
+  LOG(INFO) << "Smoother lag: " << smoother_lag_seconds << "s (" 
+            << backend_params.nr_states_ << " nodes at " 
+            << backend_params.keyframe_rate_hz_ << " Hz)";
+  smoother_ = std::make_unique<Smoother>(smoother_lag_seconds, isam_param);
 #else  // BATCH SMOOTHER
   gtsam::LevenbergMarquardtParams lmParams;
   lmParams.setlambdaInitial(0.0);     // same as GN
   lmParams.setlambdaLowerBound(0.0);  // same as GN
   lmParams.setlambdaUpperBound(0.0);  // same as GN)
-  smoother_ = std::make_unique<Smoother>(backend_params.nr_states_, lmParams);
+  // Convert nr_states (node count) to smoother lag (seconds)
+  double smoother_lag_seconds = backend_params.nr_states_ / backend_params.keyframe_rate_hz_;
+  LOG(INFO) << "Smoother lag: " << smoother_lag_seconds << "s (" 
+            << backend_params.nr_states_ << " nodes at " 
+            << backend_params.keyframe_rate_hz_ << " Hz)";
+  smoother_ = std::make_unique<Smoother>(smoother_lag_seconds, lmParams);
 #endif
 
   // Set parameters for all factors (includes GP motion priors if enabled)
@@ -1765,38 +1776,10 @@ bool VioBackend::updateSmoother(Smoother::Result* result,
               << " timestamps, range=[" << std::fixed << std::setprecision(6)
               << min_ts_after << ", " << max_ts_after << "], span=" 
               << (max_ts_after - min_ts_after) << "s";
+    
     LOG(INFO) << "VioBackend: Smoother Update - "
               << "GraphSize=" << smoother_->getFactors().size()
-              << ", Variables=" << smoother_->timestamps().size()
-              << ", Marginalized=" << result->linearVariables;
-    
-    // CRITICAL MARGINALIZATION TRACKING: Log which keys were marginalized
-    if (result->linearVariables > 0) {
-      LOG(WARNING) << "VioBackend: " << result->linearVariables << " variables were MARGINALIZED by smoother";
-      
-      // Compare pre-update and post-update values to identify marginalized keys
-      std::set<gtsam::Key> pre_keys, post_keys;
-      for (const auto& kv : smoother_values) {
-        pre_keys.insert(kv.key);
-      }
-      for (const auto& kv : post_update_values) {
-        post_keys.insert(kv.key);
-      }
-      
-      // Keys in pre but not in post were marginalized
-      std::vector<gtsam::Key> marginalized_keys;
-      std::set_difference(pre_keys.begin(), pre_keys.end(),
-                         post_keys.begin(), post_keys.end(),
-                         std::back_inserter(marginalized_keys));
-      
-      if (!marginalized_keys.empty()) {
-        std::stringstream marg_ss;
-        for (const auto& key : marginalized_keys) {
-          marg_ss << gtsam::DefaultKeyFormatter(key) << " ";
-        }
-        LOG(WARNING) << "VioBackend: Marginalized keys: " << marg_ss.str();
-      }
-    }
+              << ", Variables=" << smoother_->timestamps().size();
 
     if (debug_smoother_) {
       printSmootherInfo(new_factors, delete_slots, "CATCHING EXCEPTION", false);
