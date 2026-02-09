@@ -69,7 +69,9 @@ no_motion_position_precision: 1000
 no_motion_rotation_precision: 10000
 constant_vel_precision: 30
 numOptimize: 1
-nr_states: 25 # number of nodes in horizon.
+nr_states: 15
+# number of nodes in horizon.
+keyframe_rate_hz: 5.0 # Expected keyframe rate in Hz (used to convert nr_states to smoother lag in seconds)
 # ISAM2GaussNewtonParams: continue updating the linear delta only when
 # changes are above this threshold (default: 0.001)
 wildfire_threshold: 0.001
@@ -105,17 +107,17 @@ kimera:
   # Adds smoothness constraints on trajectory using Gaussian Process priors
   # Requires omega (angular velocity) from gyroscope measurements
   # 0 = disabled, 1 = enabled
-  add_gp_motion_priors: 0
+  add_gp_motion_priors: 1
   
   # GP Model Type - all non-Full types can be combined without interference!
   # 0 = WNOA (White Noise on Acceleration) - simplest, uses omega only
-  # 1 = WNOJ (White Noise on Jerk) - uses omega + acceleration measurements
+  # 1 = WNOJ (White Noise on Jerk) - uses omega + acceleration measurements (implemented but doesn't optimize properly)
   # 2 = WNOJFull - WNOJ with acceleration as optimized state (not implemented)
-  # 3 = Singer - exponentially decaying acceleration model
+  # 3 = Singer - exponentially decaying acceleration model (implemented, not functional)
   # 4 = SingerFull - Singer with acceleration as optimized state (not implemented)
   # 5 = WNOA+WNOJ - Both WNOA and WNOJ simultaneously
   # 6 = WNOA+Singer - WNOA plus Singer decay model
-  # 7 = WNOA+WNOJ+Singer - All three models (maximum smoothing)
+  # 7 = WNOA+WNOJ+Singer - All three models (maximum smoothing) (implemented non functional)
   #
   # Why combinations work:
   # - WNOA constrains acceleration to be white noise
@@ -129,8 +131,8 @@ kimera:
   # --------------------------------------------------------------------------
   # Controls process noise / trajectory smoothness
   # Lower values = smoother trajectory, higher values = more flexibility
-  qc_gp_trans_var: 100.0   # Translation variance (m^2/s^4) - for x, y, z
-  qc_gp_rot_var: 50.0     # Rotation variance (rad^2/s^4) - for roll, pitch, yaw
+  qc_gp_trans_var: 100.0 # Translation variance (m^2/s^4) - for x, y, z
+  qc_gp_rot_var: 50.0 # Rotation variance (rad^2/s^4) - for roll, pitch, yaw
   
   # --------------------------------------------------------------------------
   # Singer Model Parameters (used by types 3, 4, 6, 7)

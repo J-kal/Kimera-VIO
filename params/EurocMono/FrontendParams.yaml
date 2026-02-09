@@ -64,7 +64,7 @@ ransac_randomize: 0
 min_intra_keyframe_time: 0.2
 max_intra_keyframe_time: 10.0
 max_disparity_since_lkf: 200
-minNumberFeatures: 0
+minNumberFeatures: 100 # Min number of features to trigger new keyframe
 useStereoTracking: 0
 disparityThreshold: 0.5
 # Type of optical flow predictor to aid feature tracking:
@@ -73,7 +73,7 @@ disparityThreshold: 0.5
 optical_flow_predictor_type: 1
 
 # 2D-2D pose estimation method
-use_2d2d_tracking: 1
+use_2d2d_tracking: 0
 2d2d_algorithm: 1 # Nister
 optimize_2d2d_pose_from_inliers: 0
 
